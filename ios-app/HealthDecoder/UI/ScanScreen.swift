@@ -117,7 +117,9 @@ struct ScanScreen: View {
             }
         }
         .padding()
-        .navigationTitle(tr("Scan Report"))
+                .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Scan Report")) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(isPresented: $showCamera) { image in

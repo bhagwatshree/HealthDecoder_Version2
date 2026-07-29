@@ -19,25 +19,36 @@ struct MedicationTrackerScreen: View {
     }
 
     var body: some View {
-        Group {
-            if history.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "pills").font(.system(size: 40)).foregroundColor(.secondary)
-                    Text(tr("No medications yet")).foregroundColor(.secondary)
-                    Text(tr("Scan a prescription to see medicines here."))
-                        .font(.footnote).foregroundColor(.secondary)
-                }
+        VStack(spacing: 0) {
+            if !history.isEmpty {
+                MedicalSearchField(text: $searchText, placeholder: tr("Search medicines"))
+                    .padding(16)
+            }
+
+            if filtered.isEmpty {
+                EmptyStateView(
+                    icon: "pills",
+                    title: history.isEmpty ? tr("No meds") : tr("No matching reports"),
+                    description: history.isEmpty
+                        ? tr("Scan a prescription to see medicines here.")
+                        : tr("Try searching a different name")
+                )
             } else {
-                List(filtered) { item in
-                    Button { editing = item } label: { row(item) }
-                        .buttonStyle(.plain)
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(filtered) { item in
+                            Button { editing = item } label: { card(item) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(16)
                 }
-                .searchable(text: $searchText, prompt: Text(tr("Search medicines")))
             }
         }
-        .navigationTitle(tr("Medication Tracker"))
+        .medicalScreenBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Medication Tracker")) }
             ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink(value: AppRoute.chat(contextHint: "Medication Tracker")) {
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -50,19 +61,41 @@ struct MedicationTrackerScreen: View {
         }
     }
 
-    private func row(_ item: MedicationHistory) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
+    private func card(_ item: MedicationHistory) -> some View {
+        MedicalCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    statusBadge(item.status)
+                    Spacer()
+                    if item.isOptional {
+                        BadgePill(
+                            text: "SOS",
+                            background: Color.medicalSurfaceVariant,
+                            foreground: .secondary
+                        )
+                    }
+                }
                 Text(item.medicineName).font(.headline)
                 let detail = [item.currentDosage, item.currentFrequency]
                     .filter { !$0.isEmpty }.joined(separator: " • ")
                 if !detail.isEmpty {
                     Text(detail).font(.subheadline).foregroundColor(.secondary)
                 }
-                Text(item.patientName).font(.caption).foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Text(item.patientName).font(.caption).foregroundColor(.secondary)
+                    if !item.lastUpdated.isEmpty {
+                        Text("· \(item.lastUpdated)").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                // A dosage change is the thing a patient most needs to notice, so it gets
+                // its own line rather than being buried in the detail sheet.
+                if !item.previousDosage.isEmpty, item.status == "Changed" {
+                    Divider().padding(.vertical, 2)
+                    Text("\(tr("Back")): \(item.previousDosage) \(item.previousFrequency)")
+                        .font(.caption)
+                        .foregroundColor(.statusLow)
+                }
             }
-            Spacer()
-            statusBadge(item.status)
         }
     }
 
@@ -73,12 +106,12 @@ struct MedicationTrackerScreen: View {
         case "Changed": color = .statusLow
         default: color = .statusNeutral
         }
-        return Text(status)
-            .font(.caption2.bold())
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(color.opacity(0.18))
-            .foregroundColor(color)
-            .clipShape(Capsule())
+        return BadgePill(
+            text: status.uppercased(),
+            background: color.opacity(0.18),
+            foreground: color,
+            bold: true
+        )
     }
 
     private func reload() {

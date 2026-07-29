@@ -22,53 +22,57 @@ struct RemindersScreen: View {
     ]
 
     var body: some View {
-        List {
-            if notificationsDenied {
-                Section {
-                    Label(
-                        "Notifications are off, so reminders won't alert you. Enable them in Settings › Notifications.",
-                        systemImage: "bell.slash"
-                    )
-                    .font(.footnote)
-                    .foregroundColor(.statusLow)
-                }
-            }
-
-            Section(tr("Today's Meds")) {
-                if activeSlots.isEmpty {
-                    Text(tr("No medicine reminders set. Tap + to add one."))
-                        .foregroundColor(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if notificationsDenied {
+                    MedicalCard(padding: 12) {
+                        Label(
+                            tr("Notifications are off, so reminders won't alert you. Enable them in Settings › Notifications."),
+                            systemImage: "bell.slash"
+                        )
                         .font(.footnote)
+                        .foregroundColor(.statusLow)
+                    }
+                }
+
+                Text(tr("Today's Meds")).font(.subheadline.bold()).foregroundColor(.secondary)
+                if activeSlots.isEmpty {
+                    MedicalCard {
+                        Text(tr("No medicine reminders set. Tap + to add one."))
+                            .foregroundColor(.secondary)
+                            .font(.footnote)
+                    }
                 } else {
                     ForEach(activeSlots, id: \.slot) { entry in
                         slotSection(slot: entry.slot, items: entry.items)
                     }
                 }
-            }
 
-            Section(tr("Appointments")) {
+                Text(tr("Doctor Appointments"))
+                    .font(.subheadline.bold()).foregroundColor(.secondary)
+                    .padding(.top, 8)
                 if appointments.isEmpty {
-                    Text(tr("No appointments scheduled."))
-                        .foregroundColor(.secondary)
-                        .font(.footnote)
+                    MedicalCard {
+                        Text(tr("No appointments scheduled."))
+                            .foregroundColor(.secondary)
+                            .font(.footnote)
+                    }
                 } else {
                     ForEach(sortedAppointments) { appointment in
                         Button { editingAppointment = appointment } label: {
-                            appointmentRow(appointment)
+                            MedicalCard(padding: 12) { appointmentRow(appointment) }
                         }
                         .buttonStyle(.plain)
                     }
-                    .onDelete { indexSet in
-                        for index in indexSet {
-                            AppointmentStore.delete(id: sortedAppointments[index].id)
-                        }
-                        reload()
-                    }
                 }
             }
+            .padding(16)
         }
-        .navigationTitle(tr("Reminders"))
+        .medicalScreenBackground()
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Reminders")) }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -195,10 +199,10 @@ struct RemindersScreen: View {
                 }
             }
         }
-        .padding(10)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(style.bg)
-        .cornerRadius(12)
-        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func appointmentRow(_ appointment: AppointmentSchedule) -> some View {

@@ -26,8 +26,10 @@ struct ContentView: View {
 /// The post-login navigation shell: Home at the root, with Scan/Records/Report Detail pushed
 /// on top via `AppRoute` — the SwiftUI analog of Navigation3's type-safe back stack.
 private struct MainRootView: View {
+    @State private var path = NavigationPath()
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             HomeScreen()
                 .navigationDestination(for: AppRoute.self) { route in
                     switch route {
@@ -52,6 +54,27 @@ private struct MainRootView: View {
                     }
                 }
         }
+        #if DEBUG
+        // Lets a debug build launch straight onto a screen for UI checks/screenshots:
+        //   xcrun simctl launch <device> <bundle-id> -startAt records
+        // Compiled out of release builds entirely.
+        .onAppear {
+            guard
+                let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-startAt"),
+                index + 1 < ProcessInfo.processInfo.arguments.count
+            else { return }
+            switch ProcessInfo.processInfo.arguments[index + 1] {
+            case "records": path.append(AppRoute.records)
+            case "scan": path.append(AppRoute.scan)
+            case "reminders": path.append(AppRoute.reminders)
+            case "medications": path.append(AppRoute.medicationTracker)
+            case "pendingTests": path.append(AppRoute.pendingTests)
+            case "chat": path.append(AppRoute.chat(contextHint: "Records"))
+            case "doctorBrief": path.append(AppRoute.doctorBrief(patientName: ""))
+            default: break
+            }
+        }
+        #endif
     }
 }
 

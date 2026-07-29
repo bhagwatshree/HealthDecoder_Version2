@@ -52,7 +52,9 @@ struct LiveVisionScreen: View {
                 .background(Color.black.opacity(0.6))
             }
         }
-        .navigationTitle(tr("Smart Health Lens"))
+                .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Smart Health Lens")) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if permissionGranted {

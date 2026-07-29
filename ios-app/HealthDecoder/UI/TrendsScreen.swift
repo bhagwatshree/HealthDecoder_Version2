@@ -14,6 +14,8 @@ struct TrendsScreen: View {
             
             Spacer()
         }
-        .navigationTitle(tr("Trends"))
+            .toolbar {
+        ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Health Trends")) }
+    }
     }
 }

@@ -81,7 +81,9 @@ struct ChatScreen: View {
             }
             .padding(10)
         }
-        .navigationTitle(tr("AI Health Assistant"))
+                .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("AI Health Assistant")) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { speech.stop(); dictation.stop() }
     }

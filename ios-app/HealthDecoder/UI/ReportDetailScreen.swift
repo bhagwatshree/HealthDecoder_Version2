@@ -40,7 +40,9 @@ struct ReportDetailScreen: View {
                 ProgressView()
             }
         }
-        .navigationTitle(tr("Report Details"))
+                .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Report Details")) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {

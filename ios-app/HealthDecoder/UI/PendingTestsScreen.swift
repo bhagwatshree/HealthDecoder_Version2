@@ -19,36 +19,38 @@ struct PendingTestsScreen: View {
     }
 
     var body: some View {
-        Group {
-            if tests.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "testtube.2").font(.system(size: 40)).foregroundColor(.secondary)
-                    Text(tr("No pending tests")).foregroundColor(.secondary)
-                    Text(tr("Tests your doctor recommends are added here automatically when you scan a report."))
-                        .font(.footnote).foregroundColor(.secondary)
-                        .multilineTextAlignment(.center).padding(.horizontal, 32)
-                }
+        VStack(spacing: 0) {
+            if !tests.isEmpty {
+                MedicalSearchField(text: $searchText, placeholder: tr("Search tests"))
+                    .padding(16)
+            }
+
+            if filtered.isEmpty {
+                EmptyStateView(
+                    icon: "testtube.2",
+                    title: tr("No pending tests"),
+                    description: tr("Tests your doctor recommends are added here automatically when you scan a report.")
+                )
             } else {
-                List {
-                    if !pending.isEmpty {
-                        Section(tr("Pending Tests")) {
-                            ForEach(pending) { test in row(test) }
-                                .onDelete { delete($0, from: pending) }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if !pending.isEmpty {
+                            sectionHeader(tr("Pending Tests"))
+                            ForEach(pending) { test in card(test) }
+                        }
+                        if !completed.isEmpty {
+                            sectionHeader(tr("Completed")).padding(.top, 8)
+                            ForEach(completed) { test in card(test) }
                         }
                     }
-                    if !completed.isEmpty {
-                        Section(tr("Completed")) {
-                            ForEach(completed) { test in row(test) }
-                                .onDelete { delete($0, from: completed) }
-                        }
-                    }
+                    .padding(16)
                 }
-                .searchable(text: $searchText, prompt: Text(tr("Search tests")))
             }
         }
-        .navigationTitle(tr("Pending Tests"))
+        .medicalScreenBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Pending Tests")) }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button { addingTest = true } label: { Image(systemName: "plus") }
             }
@@ -61,6 +63,53 @@ struct PendingTestsScreen: View {
         .onAppear(perform: reload)
         .sheet(isPresented: $addingTest) {
             PendingTestEditSheet { reload() }
+        }
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline.bold())
+            .foregroundColor(.secondary)
+    }
+
+    private func card(_ test: PendingTest) -> some View {
+        MedicalCard(padding: 12) {
+            HStack(spacing: 12) {
+                Button {
+                    toggleCompleted(test)
+                } label: {
+                    Image(systemName: test.status == "Completed" ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(test.status == "Completed" ? .statusNormal : .secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(test.testName)
+                        .fontWeight(.semibold)
+                        .strikethrough(test.status == "Completed")
+                        .foregroundColor(test.status == "Completed" ? .secondary : .primary)
+                    HStack(spacing: 6) {
+                        Text(test.patientName).font(.caption).foregroundColor(.secondary)
+                        if let due = test.dueDate, !due.isEmpty {
+                            BadgePill(
+                                text: "\(tr("Due Date")): \(due)",
+                                background: isOverdue(due) ? Color.statusHigh.opacity(0.15) : Color.medicalSurfaceVariant,
+                                foreground: isOverdue(due) ? .statusHigh : .secondary,
+                                size: 11
+                            )
+                        }
+                    }
+                }
+                Spacer()
+                Button(role: .destructive) {
+                    LocalRepository.deletePendingTest(id: test.id)
+                    reload()
+                } label: {
+                    Image(systemName: "trash").foregroundColor(.statusHigh)
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 

@@ -34,7 +34,9 @@ struct DoctorBriefScreen: View {
             }
             .padding()
         }
-        .navigationTitle(tr("Doctor Visit Brief"))
+                .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Doctor Visit Brief")) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {

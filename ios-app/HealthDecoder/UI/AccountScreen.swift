@@ -42,6 +42,8 @@ struct AccountScreen: View {
                 }
             }
         }
-        .navigationTitle(tr("Account"))
+            .toolbar {
+        ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Account")) }
+    }
     }
 }

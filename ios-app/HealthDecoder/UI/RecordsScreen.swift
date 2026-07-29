@@ -1,79 +1,117 @@
 import SwiftUI
 
-/// Searchable report list, mirroring `ui/RecordsScreen.kt`. FTS-backed search on Android;
-/// Phase 1 does a simple in-memory substring filter until the FTS mirror table lands.
+/// Searchable report list — port of `ui/RecordsScreen.kt`: logo top bar, rounded search field,
+/// period filter chips, report cards on the tinted background with the logo watermark, and a
+/// FAB that jumps to Scan.
 struct RecordsScreen: View {
     @State private var reports: [MedicalReport] = []
     @State private var searchText = ""
+    @State private var selectedPeriod: String?
+
+    /// (value, label) pairs, matching Android's period chips.
+    private let periods: [(value: String?, label: String)] = [
+        (nil, "All Time"), ("1m", "1 Month"), ("3m", "3 Months"), ("6m", "6 Months")
+    ]
 
     private var filtered: [MedicalReport] {
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return reports }
-        let query = searchText.lowercased()
-        return reports.filter {
-            ($0.patientName ?? "").lowercased().contains(query) ||
-            ($0.reportType ?? "").lowercased().contains(query) ||
-            ($0.reportCategory ?? "").lowercased().contains(query) ||
-            ($0.extractedText ?? "").lowercased().contains(query)
+        var result = reports
+
+        if let period = selectedPeriod, let cutoff = cutoffDate(for: period) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            let cutoffString = formatter.string(from: cutoff)
+            result = result.filter { report in
+                let date = report.reportDate ?? String(report.createdAt.prefix(10))
+                return date >= cutoffString
+            }
+        }
+
+        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return result }
+        return result.filter { report in
+            (report.patientName ?? "").lowercased().contains(query)
+                || (report.reportType ?? "").lowercased().contains(query)
+                || (report.reportCategory ?? "").lowercased().contains(query)
+                || (report.comments ?? "").lowercased().contains(query)
+                || (report.extractedText ?? "").lowercased().contains(query)
+                || report.medications.contains { $0.name.lowercased().contains(query) }
         }
     }
 
+    private func cutoffDate(for period: String) -> Date? {
+        let months: Int
+        switch period {
+        case "1m": months = 1
+        case "3m": months = 3
+        case "6m": months = 6
+        default: return nil
+        }
+        return Calendar.current.date(byAdding: .month, value: -months, to: Date())
+    }
+
     var body: some View {
-        Group {
-            if reports.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text(tr("No reports yet"))
-                        .foregroundColor(.secondary)
-                    Text(tr("Scan a report to see it here."))
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                MedicalSearchField(
+                    text: $searchText,
+                    placeholder: tr("Search reports, patient, or document text...")
+                )
+                .padding(16)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(periods, id: \.label) { period in
+                            MedicalFilterChip(
+                                label: tr(period.label),
+                                isSelected: selectedPeriod == period.value
+                            ) {
+                                selectedPeriod = period.value
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
                 }
-            } else {
-                List(filtered) { report in
-                    NavigationLink(value: AppRoute.reportDetail(id: report.id)) {
-                        RecordRow(report: report)
+                .padding(.bottom, 8)
+
+                if filtered.isEmpty {
+                    EmptyStateView(
+                        icon: "clock.arrow.circlepath",
+                        title: searchText.isEmpty ? tr("No scanned history") : tr("No matching reports"),
+                        description: searchText.isEmpty
+                            ? tr("Press 'Scan Report' to upload your first prescription.")
+                            : tr("Try searching a different name")
+                    )
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(filtered) { report in
+                                NavigationLink(value: AppRoute.reportDetail(id: report.id)) {
+                                    ReportItemCard(report: report)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(16)
+                        .padding(.bottom, 80) // clearance for the FAB
                     }
                 }
-                .searchable(text: $searchText, prompt: Text(tr("Search records")))
             }
+
+            NavigationLink(value: AppRoute.scan) {
+                MedicalFAB { Image(systemName: "plus") }
+            }
+            .padding(20)
         }
-        .navigationTitle(tr("Records"))
+        .medicalScreenBackground()
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) { TopBarTitle(title: tr("Records")) }
             ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: ChatScreen(context: "Records")) {
-                    Image(systemName: "message.fill")
+                NavigationLink(value: AppRoute.chat(contextHint: "Records")) {
+                    Image(systemName: "bubble.left.and.bubble.right")
                 }
             }
         }
         .onAppear { reports = LocalRepository.getAllReports() }
-        .refreshable { reports = LocalRepository.getAllReports() }
-    }
-}
-
-private struct RecordRow: View {
-    let report: MedicalReport
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(report.patientName?.isEmpty == false ? report.patientName! : "Unknown Patient")
-                    .font(.headline)
-                Text([report.reportType, report.reportDate].compactMap { $0 }.joined(separator: " • "))
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            Spacer()
-            if !report.analyzed {
-                Text(tr("PROCESSING"))
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.statusLow.opacity(0.2))
-                    .foregroundColor(.statusLow)
-                    .cornerRadius(6)
-            }
-        }
     }
 }
