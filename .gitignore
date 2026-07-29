@@ -38,3 +38,16 @@ samconfig.toml
 
 # --- Local debug captures ---
 scratch_*.txt
+
+# --- iOS / Xcode ---
+ios-app/Secrets.xcconfig
+ios-app/HealthDecoder/GoogleService-Info.plist
+ios-app/*.xcodeproj/
+ios-app/*.xcworkspace/
+ios-app/build/
+ios-app/.build/
+ios-app/DerivedData/
+ios-app/.swiftpm/
+# Info.plist is generated from project.yml by xcodegen, like the .xcodeproj itself.
+ios-app/Generated/
+xcuserdata/

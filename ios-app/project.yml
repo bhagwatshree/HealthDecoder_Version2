@@ -1,0 +1,73 @@
+name: HealthDecoder
+
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+configFiles:
+  Debug: Secrets.xcconfig
+  Release: Secrets.xcconfig
+
+packages:
+  SQLCipher:
+    url: https://github.com/sqlcipher/SQLCipher.swift
+    from: 4.17.0
+
+targets:
+  HealthDecoder:
+    type: application
+    platform: iOS
+    sources:
+      - path: HealthDecoder
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Medical Assist
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSCameraUsageDescription: "Medical Assist needs camera access to photograph medical reports and prescriptions."
+        NSPhotoLibraryUsageDescription: "Medical Assist needs photo library access to import existing report images and PDFs."
+        NSFaceIDUsageDescription: "Medical Assist can use Face ID to quickly and securely unlock the app."
+        NSMicrophoneUsageDescription: "Medical Assist uses the microphone so you can ask the AI assistant questions by voice."
+        NSSpeechRecognitionUsageDescription: "Medical Assist transcribes your spoken questions so the AI assistant can answer them."
+        ITSAppUsesNonExemptEncryption: false
+        # Backend-issued values, substituted from Secrets.xcconfig at build time (see that
+        # file's comments) — read at runtime via BuildKeys.swift, mirroring Android's
+        # BuildConfig-generated BuildKeys.kt.
+        GEMINI_API_KEY: "$(GEMINI_API_KEY)"
+        SARVAM_API_KEY: "$(SARVAM_API_KEY)"
+        GOOGLE_WEB_CLIENT_ID: "$(GOOGLE_WEB_CLIENT_ID)"
+        # Deep-link scheme for the future Gmail-linking OAuth flow (Phase 4) — mirrors
+        # Android's `medicalscanner://oauth2` / `oauth2-link` handling in Navigation.kt.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.example.medicalscanner.oauth
+            CFBundleURLSchemes:
+              - medicalscanner
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.medicalscanner
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: MedicalTeal
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # SQLCipher's codec (sqlite3_key/PRAGMA key support) is compiled in behind this flag.
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - "$(inherited)"
+          - "SQLITE_HAS_CODEC=1"
+    dependencies:
+      - package: SQLCipher
+
+schemes:
+  HealthDecoder:
+    build:
+      targets:
+        HealthDecoder: all
+    run:
+      config: Debug
+    test:
+      config: Debug
