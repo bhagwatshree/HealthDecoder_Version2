@@ -31,6 +31,11 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   try {
     // Accept either raw JSON or base64-encoded JSON — base64 survives being passed
     // through `sam deploy --parameter-overrides`, which mangles quotes and spaces.
+    // Keep the stored secret trimmed to the 4 fields cert() actually needs (type,
+    // project_id, private_key, client_email) — Lambda enforces a 4KB *combined* limit
+    // across all env vars, and the full downloaded JSON's extra fields (private_key_id,
+    // client_id, auth_uri/token_uri/cert URLs, universe_domain) aren't used here but
+    // are large enough after base64 inflation to blow that budget on their own.
     let rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
     if (!rawServiceAccount.startsWith('{')) {
       rawServiceAccount = Buffer.from(rawServiceAccount, 'base64').toString('utf8');
@@ -91,6 +96,16 @@ export function signToken(user) {
   );
 }
 
+/**
+ * Signs a long-lived, anonymous device token — no OTP/login involved. `deviceId` is a UUID
+ * the app generates once on first launch and persists; this just lets the AI proxy
+ * (POST /api/ai/generate) meter/pool a Gemini key per install without requiring an account.
+ * `type: 'device'` is what requireDeviceOrUser uses to distinguish this from a real user token.
+ */
+export function signDeviceToken(deviceId) {
+  return jwt.sign({ deviceId, type: 'device' }, JWT_SECRET, { expiresIn: '365d' });
+}
+
 /** Encrypts a plaintext string (e.g. a user's own API key) for storage. */
 export function encrypt(text) {
   if (!text) return null;
@@ -137,6 +152,42 @@ export async function requireAuth(req, res, next) {
     }
 
     req.user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid or expired session.' });
+  }
+}
+
+/**
+ * Express middleware for routes that accept EITHER a real logged-in user OR an anonymous
+ * device token (see signDeviceToken) — used by the AI proxy (POST /api/ai/generate) so
+ * scanning works whether or not the user ever signed in. Sets `req.auth = { kind: 'user', user }`
+ * or `req.auth = { kind: 'device', deviceId }`; a user token also sets `req.user` as usual.
+ */
+export async function requireDeviceOrUser(req, res, next) {
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Authentication required.' });
+
+    const payload = jwt.verify(token, JWT_SECRET);
+
+    if (payload.type === 'device') {
+      if (!payload.deviceId) return res.status(401).json({ error: 'Invalid device session.' });
+      req.auth = { kind: 'device', deviceId: payload.deviceId };
+      return next();
+    }
+
+    const result = await db.query('SELECT * FROM users WHERE id = $1', [payload.sub]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid session.' });
+
+    const user = result.rows[0];
+    if ((payload.token_version ?? 0) !== (user.token_version ?? 0)) {
+      return res.status(401).json({ error: 'Session has been revoked. Please log in again.' });
+    }
+
+    req.user = user;
+    req.auth = { kind: 'user', user };
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid or expired session.' });

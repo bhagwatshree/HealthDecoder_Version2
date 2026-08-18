@@ -10,6 +10,7 @@
     "build": "sam build",
     "deploy": "sam build && sam deploy",
     "deploy:guided": "sam build && sam deploy --guided",
+    "gen-samconfig": "node scripts/gen-samconfig.js",
     "migrate": "node migrate.js"
   },
   "dependencies": {

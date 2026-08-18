@@ -11,3 +11,21 @@ SARVAM_API_KEY=your_sarvam_api_key_here
 # needs a *server* client ID even though this is an Android app). Use the same client ID as
 # the backend's GOOGLE_CLIENT_ID (backend/.env.example). Leave blank to hide that button.
 GOOGLE_WEB_CLIENT_ID=your_google_oauth_web_client_id_here
+
+# Feature flags — see FeatureFlags.kt for why each defaults to off (SMS/API cost risk that
+# hasn't been verified safe at public scale). Set to true only once you've confirmed the
+# relevant cost/quota story for your own deployment.
+PHONE_AUTH_ENABLED=false
+GOOGLE_SIGNIN_ENABLED=false
+GMAIL_SYNC_ENABLED=false
+
+# Release signing keystore (needed only for ./gradlew assembleRelease / bundleRelease).
+# Generate one with: keytool -genkeypair -v -keystore keystore/release.jks -alias yourapp \
+#   -keyalg RSA -keysize 2048 -validity 10000
+# Back the resulting .jks file and these passwords up somewhere safe — losing them means you
+# can no longer publish updates to the same Play Store listing under Google's classic signing,
+# though Play App Signing's upload-key-reset support flow can recover from a lost upload key.
+RELEASE_STORE_FILE=keystore/release.jks
+RELEASE_STORE_PASSWORD=
+RELEASE_KEY_ALIAS=
+RELEASE_KEY_PASSWORD=

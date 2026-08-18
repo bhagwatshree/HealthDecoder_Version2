@@ -294,6 +294,43 @@ ON CONFLICT (language, text_key) DO NOTHING;
     `);
     console.log('Table ui_translations created/seeded.');
 
+    // Personalized Health Tips — natural lifestyle-only tips (diet, hydration, sleep, movement,
+    // NEVER medication-specific) keyed by canonical test name + High/Low status. Mirrors
+    // ui_translations: the DB is the source of truth so new tips reach every install without an
+    // app release; the app falls back to its bundled seed (PersonalizedTips.kt) until the first
+    // successful fetch, or for any test not yet covered here.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS health_tips (
+          id SERIAL PRIMARY KEY,
+          canonical_param TEXT NOT NULL,
+          status VARCHAR(10) NOT NULL,
+          headline TEXT NOT NULL,
+          detail TEXT NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (canonical_param, status)
+      );
+    `);
+    await db.query(`
+INSERT INTO health_tips (canonical_param, status, headline, detail) VALUES
+    ('Sodium', 'low', 'Your sodium ran low', 'Coconut water, buttermilk (chaas), or a pinch of rock salt in water can help — especially in hot weather or after heavy sweating. If it stays low, that''s worth a doctor''s visit rather than adjusting salt alone.'),
+    ('Potassium', 'low', 'Your potassium ran low', 'Bananas, coconut water, potatoes (with skin), spinach, and citrus fruits are everyday sources that support normal levels.'),
+    ('Hemoglobin', 'low', 'Your hemoglobin ran low', 'Iron-rich foods — leafy greens, jaggery, dates, pomegranate, and lean meat if you eat non-veg — paired with vitamin C (citrus, amla) improves iron absorption.'),
+    ('Vitamin D', 'low', 'Your Vitamin D ran low', '10-15 minutes of morning sunlight a few times a week, plus foods like eggs, mushrooms, and fortified milk, are simple everyday sources.'),
+    ('Vitamin B12', 'low', 'Your Vitamin B12 ran low', 'Dairy, eggs, and (if you eat non-veg) fish and meat are the main natural sources — B12 is one of the few nutrients hard to get from a purely plant diet.'),
+    ('Calcium', 'low', 'Your calcium ran low', 'Dairy, sesame seeds (til), ragi, and leafy greens are everyday calcium sources — a short daily walk also helps your body put calcium to use.'),
+    ('Blood Sugar', 'low', 'Your blood sugar ran low', 'Keep a small snack (fruit, nuts, or a glucose candy) on hand between meals, and avoid long gaps without eating — that''s the most common everyday cause.'),
+    ('Iron', 'low', 'Your iron ran low', 'Leafy greens, jaggery, dates, and pomegranate — eaten alongside vitamin C (citrus, amla) — help your body absorb iron better from food.'),
+    ('Blood Sugar', 'high', 'Your blood sugar ran high', 'A 10-15 minute walk after meals is one of the simplest everyday habits that helps the body use up blood sugar. Cutting back on refined carbs and sugary drinks helps too.'),
+    ('Total Cholesterol', 'high', 'Your cholesterol ran high', 'Swapping fried snacks for nuts/seeds, adding more fibre (oats, whole grains, vegetables), and regular walking are everyday habits that support healthier cholesterol.'),
+    ('LDL', 'high', 'Your LDL ("bad" cholesterol) ran high', 'More fibre (oats, legumes, vegetables), less fried/processed food, and regular movement are the everyday habits that help bring LDL down over time.'),
+    ('Triglycerides', 'high', 'Your triglycerides ran high', 'Cutting back on sugar, refined carbs, and alcohol tends to move triglycerides more than any other single habit — along with regular physical activity.'),
+    ('Uric Acid', 'high', 'Your uric acid ran high', 'Cutting back on red meat, organ meats, and sugary drinks, plus staying well hydrated, are the everyday habits that help most.'),
+    ('Sodium', 'high', 'Your sodium ran high', 'Cutting back on packaged/processed foods (a major hidden salt source) and drinking enough water are the simplest everyday habits that help.'),
+    ('TSH', 'high', 'Your TSH ran outside the usual range', 'Consistent sleep timing and regular meals support general thyroid-friendly habits — thyroid levels are usually medication-managed, so treat this as a supporting habit, not a fix on its own.')
+ON CONFLICT (canonical_param, status) DO NOTHING;
+    `);
+    console.log('Table health_tips created/seeded.');
+
     // UHI/Beckn search sessions table for async results cache
     await db.query(`
       CREATE TABLE IF NOT EXISTS uhi_search_sessions (
@@ -307,6 +344,25 @@ ON CONFLICT (language, text_key) DO NOTHING;
       );
     `);
     console.log('Table uhi_search_sessions created or checked.');
+
+    // Anonymous per-install identity for the AI proxy (POST /api/ai/generate). Phone OTP
+    // login is optional/off by default (see FeatureFlags.PHONE_AUTH_ENABLED), so most phones
+    // never authenticate as a `users` row — this lets the backend still meter/pool a Gemini
+    // key per device without any SMS-based sign-in. Mirrors users' usage_count/usage_period_start.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS devices (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          device_id TEXT UNIQUE NOT NULL,
+          usage_count INTEGER NOT NULL DEFAULT 0,
+          usage_period_start DATE NOT NULL DEFAULT CURRENT_DATE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Table devices created or checked.');
+
+    await db.query(`ALTER TABLE api_usage_events ADD COLUMN IF NOT EXISTS device_id UUID REFERENCES devices(id) ON DELETE SET NULL;`);
+    console.log('Column api_usage_events.device_id checked/added.');
 
     console.log('Database migration completed successfully!');
     process.exit(0);

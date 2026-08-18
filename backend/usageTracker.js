@@ -5,12 +5,14 @@ import { costGeminiUsd, costSarvamUsd, costFirebaseVerifyUsd } from './pricing.j
 const als = new AsyncLocalStorage();
 
 /** Wraps a request handler so trackGemini/trackSarvam/trackFirebaseVerify calls inside it
- *  are attributed to the given operation/user, then flushes them to api_usage_events once
- *  the handler settles (success or failure) — logging failures never affect the response. */
-export async function runWithUsageContext({ userId, operation }, fn) {
+ *  are attributed to the given operation/user (or anonymous device — [deviceId] is the
+ *  `devices.id` UUID row, from keyPool.getOrCreateDevice, not the client's own device_id
+ *  string), then flushes them to api_usage_events once the handler settles (success or
+ *  failure) — logging failures never affect the response. */
+export async function runWithUsageContext({ userId, deviceId, operation }, fn) {
   const events = [];
   try {
-    return await als.run({ userId, operation, events }, fn);
+    return await als.run({ userId, deviceId, operation, events }, fn);
   } finally {
     if (events.length > 0) {
       await flushEvents(events).catch((err) => console.error('Failed to write usage events:', err.message));
@@ -21,16 +23,16 @@ export async function runWithUsageContext({ userId, operation }, fn) {
 function record(event) {
   const store = als.getStore();
   if (!store) return; // Not inside a tracked request (e.g. called from a script) — skip silently.
-  store.events.push({ userId: store.userId, operation: store.operation, ...event });
+  store.events.push({ userId: store.userId, deviceId: store.deviceId, operation: store.operation, ...event });
 }
 
 async function flushEvents(events) {
   for (const e of events) {
     await db.query(
       `INSERT INTO api_usage_events
-         (user_id, provider, operation, model, input_tokens, output_tokens, units, latency_ms, cost_usd, success)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [e.userId || null, e.provider, e.operation, e.model || null, e.inputTokens ?? null,
+         (user_id, device_id, provider, operation, model, input_tokens, output_tokens, units, latency_ms, cost_usd, success)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [e.userId || null, e.deviceId || null, e.provider, e.operation, e.model || null, e.inputTokens ?? null,
        e.outputTokens ?? null, e.units ?? null, e.latencyMs ?? null, e.costUsd || 0, e.success !== false]
     );
   }

@@ -8,23 +8,26 @@ import { decrypt } from './auth.js';
 // keep any single free user from starving the others sharing their pool key.
 export const FREE_TIER_DAILY_LIMIT = parseInt(process.env.FREE_TIER_DAILY_LIMIT || '50', 10);
 
+// Comma-separated in GEMINI_API_KEYS — scales automatically with however many keys are
+// listed there (no code change needed to add/remove pool capacity, just update the secret).
 function loadGeminiKeyPool() {
   const raw = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
   return raw.split(',').map(k => k.trim()).filter(Boolean);
 }
 
 /**
- * Deterministically (stickily) assigns each user to ONE key in the pool, based on a hash
- * of their user id. This is the "multiple free tiers" mechanism: if you configure N Gemini
- * API keys (each its own Google Cloud project, each with its own free-tier quota) in
- * GEMINI_API_KEYS, users are spread evenly across the N projects. A heavy user only ever
- * consumes the daily quota of THEIR assigned project, not everyone else's — so adding more
- * keys to the pool directly raises the number of users the free tier can support.
+ * Deterministically (stickily) assigns each caller to ONE key in the pool, based on a hash
+ * of their id (a logged-in user's id, or an anonymous device's device_id — this function
+ * doesn't care which, it just needs a stable string). This is the "multiple free tiers"
+ * mechanism: if you configure N Gemini API keys (each its own Google Cloud project, each
+ * with its own free-tier quota) in GEMINI_API_KEYS, callers are spread evenly across the N
+ * projects. A heavy caller only ever consumes the daily quota of THEIR assigned project, not
+ * everyone else's — so adding more keys to the pool directly raises how many the free tier supports.
  */
-function assignedHouseKey(userId) {
+function assignedHouseKey(id) {
   const pool = loadGeminiKeyPool();
   if (pool.length === 0) return null;
-  const hash = crypto.createHash('sha256').update(String(userId)).digest();
+  const hash = crypto.createHash('sha256').update(String(id)).digest();
   const index = hash.readUInt32BE(0) % pool.length;
   return pool[index];
 }
@@ -55,6 +58,80 @@ async function incrementUsage(userId) {
     [userId]
   );
   return result.rows[0].usage_count;
+}
+
+// ── Anonymous device identity (no OTP/login) ───────────────────────────────────────────────
+// Phone OTP sign-in is optional/off by default, so most installs never become a `users` row.
+// These mirror peekUsage/incrementUsage exactly, but against the `devices` table keyed by the
+// client-generated device_id, so the AI proxy can still meter/pool a key per install.
+
+/** Inserts the device on first contact (idempotent) and returns its row id (used to attribute
+ *  api_usage_events.device_id). Safe to call on every request — cheap upsert, just bumps last_seen_at. */
+export async function getOrCreateDevice(deviceId) {
+  const result = await db.query(
+    `INSERT INTO devices (device_id) VALUES ($1)
+     ON CONFLICT (device_id) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP
+     RETURNING id`,
+    [deviceId]
+  );
+  return result.rows[0].id;
+}
+
+async function peekUsageForDevice(deviceId) {
+  const result = await db.query(
+    `SELECT CASE WHEN usage_period_start = CURRENT_DATE THEN usage_count ELSE 0 END AS effective_count
+     FROM devices WHERE device_id = $1`,
+    [deviceId]
+  );
+  return result.rows[0]?.effective_count ?? 0;
+}
+
+async function incrementUsageForDevice(deviceId) {
+  const result = await db.query(
+    `UPDATE devices SET
+       usage_count = CASE WHEN usage_period_start = CURRENT_DATE THEN usage_count + 1 ELSE 1 END,
+       usage_period_start = CURRENT_DATE,
+       last_seen_at = CURRENT_TIMESTAMP
+     WHERE device_id = $1
+     RETURNING usage_count`,
+    [deviceId]
+  );
+  return result.rows[0]?.usage_count ?? 0;
+}
+
+/** Read-only device usage view, mirroring peekAssignmentForUser. */
+export async function peekAssignmentForDevice(deviceId) {
+  const usageToday = await peekUsageForDevice(deviceId);
+  return {
+    billedTo: usageToday >= FREE_TIER_DAILY_LIMIT ? 'none' : 'free',
+    usageToday,
+    limit: FREE_TIER_DAILY_LIMIT,
+    quotaExceeded: usageToday >= FREE_TIER_DAILY_LIMIT,
+  };
+}
+
+/**
+ * Resolves which Gemini/Sarvam keys an ANONYMOUS device (no login) should use for one AI
+ * proxy call. Unlike resolveKeysForUser's original design (meter once per "issuance" because
+ * the phone used to call Gemini directly, many times, per issued key), the app now calls our
+ * own /api/ai/generate proxy once per actual Gemini request — so this metiers per call, which
+ * is a more accurate cost signal and is what both resolveKeysForUser and this are used for now.
+ */
+export async function resolveKeysForDevice(deviceId) {
+  const sarvamKey = process.env.SARVAM_API_KEY || null;
+  const usageToday = await peekUsageForDevice(deviceId);
+  if (usageToday >= FREE_TIER_DAILY_LIMIT) {
+    return { geminiKey: null, sarvamKey, billedTo: 'none', usageToday, limit: FREE_TIER_DAILY_LIMIT, quotaExceeded: true };
+  }
+  const newCount = await incrementUsageForDevice(deviceId);
+  return {
+    geminiKey: assignedHouseKey(deviceId),
+    sarvamKey,
+    billedTo: 'free',
+    usageToday: newCount,
+    limit: FREE_TIER_DAILY_LIMIT,
+    quotaExceeded: false,
+  };
 }
 
 /**

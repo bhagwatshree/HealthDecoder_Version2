@@ -4,28 +4,20 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- MMB Monogram: Two M's and a B connected by a medical heartbeat line -->
-    <!-- All content centered within the 66x66 safe zone (offset 21,21) -->
-
-    <!-- First M -->
+    <!-- Safe zone canvas (centered 66x66 region between 21 and 87) -->
+    
+    <!-- Letter H & Medical Cross Left Column -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M27,38 L27,70 L30.5,70 L30.5,45 L36.5,58 L38.5,58 L44.5,45 L44.5,70 L48,70 L48,38 L44.5,38 L37.5,54 L30.5,38 Z" />
+        android:fillColor="#00E5FF"
+        android:pathData="M28,32 L36,32 L36,48 L48,48 L48,32 L56,32 L56,76 L48,76 L48,56 L36,56 L36,76 L28,76 Z" />
 
-    <!-- Second M -->
+    <!-- Letter D Outer Curve -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M50,38 L50,70 L53.5,70 L53.5,45 L59.5,58 L61.5,58 L67.5,45 L67.5,70 L71,70 L71,38 L67.5,38 L60.5,54 L53.5,38 Z" />
+        android:fillColor="#0288D1"
+        android:pathData="M61,32 L75,32 C85,32 90,40 90,54 C90,68 85,76 75,76 L61,76 L61,68 L73,68 C79,68 82,62 82,54 C82,46 79,40 73,40 L61,40 Z" />
 
-    <!-- B -->
+    <!-- Pulse / Decoder Signal Line -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M73,38 L73,70 L82,70 C86.4,70 89,67.5 89,64 C89,61.2 87.3,59 84.5,58.2 C86.8,57.3 88,55.2 88,52.8 C88,49.2 85.5,47 81.5,47 L81.5,38 L73,38 Z M76.5,41 L81,41 C83.8,41 85.5,42.5 85.5,45 C85.5,47.5 83.8,49 81,49 L76.5,49 L76.5,41 Z M76.5,52 L82,52 C84.8,52 86.5,53.7 86.5,56.2 C86.5,58.7 84.8,60.4 82,60.4 L76.5,60.4 L76.5,52 Z" />
-
-    <!-- Medical heartbeat / pulse line running beneath the letters -->
-    <path
-        android:fillColor="#4DB6AC"
-        android:strokeWidth="0"
-        android:pathData="M24,72 L35,72 L38,66 L41,78 L44,69 L47,72 L55,72 L58,66 L61,78 L64,69 L67,72 L90,72 L90,73.5 L66,73.5 L63.5,70.5 L60.5,79.5 L57.5,67.5 L54,73.5 L46,73.5 L43.5,70.5 L40.5,79.5 L37.5,67.5 L34,73.5 L24,73.5 Z" />
-
+        android:fillColor="#10B981"
+        android:pathData="M20,54 L38,54 L42,44 L46,66 L52,38 L57,60 L60,52 L62,54 L88,54 L88,57 L61,57 L58,53 L56,67 L51,31 L45,73 L41,47 L36,57 L20,57 Z" />
 </vector>

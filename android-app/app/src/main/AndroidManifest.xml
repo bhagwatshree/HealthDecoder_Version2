@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -11,17 +12,31 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <uses-permission android:name="android.permission.GET_ACCOUNTS" />
+
+    <!-- firebase-analytics (a transitive companion to Firebase Auth, see below) auto-declares
+         these even though analytics collection is disabled and nothing in this app reads an
+         advertising ID. Removed so the manifest matches reality: Play Console's Advertising ID
+         declaration can honestly answer "No, my app doesn't use advertising ID." -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/medical_assist_logo"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/medical_assist_logo"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:windowSoftInputMode="adjustResize"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.MedicalScanner">
+
+        <!-- The firebase-analytics dependency is present only as a transitive companion to
+             Firebase Auth; nothing in this codebase calls the Analytics API. Auto-collection
+             defaults to ON the moment the SDK is present, so it must be explicitly disabled to
+             match the app's actual no-telemetry, local-first design. -->
+        <meta-data
+            android:name="firebase_analytics_collection_enabled"
+            android:value="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -62,7 +77,7 @@
             android:name=".reminder.MedicineReminderReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.medicalscanner.MEDICINE_REMINDER" />
+                <action android:name="com.healthdecoder.app.MEDICINE_REMINDER" />
             </intent-filter>
         </receiver>
 
@@ -70,7 +85,7 @@
             android:name=".reminder.AppointmentReminderReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.medicalscanner.APPOINTMENT_REMINDER" />
+                <action android:name="com.healthdecoder.app.APPOINTMENT_REMINDER" />
             </intent-filter>
         </receiver>
 
@@ -78,7 +93,7 @@
             android:name=".reminder.EmailScanAlarmReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.medicalscanner.EMAIL_SCAN" />
+                <action android:name="com.healthdecoder.app.EMAIL_SCAN" />
             </intent-filter>
         </receiver>
 

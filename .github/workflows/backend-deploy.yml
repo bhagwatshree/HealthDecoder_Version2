@@ -1,0 +1,102 @@
+name: Backend deploy
+
+on:
+  pull_request:
+    branches: [master]
+    paths: ['backend/**']
+  push:
+    branches: [master]
+    paths: ['backend/**']
+  workflow_dispatch: {}
+
+# Cancel an in-flight run if a new one starts on the same branch — avoids two deploys racing.
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs on every PR and push — validates the Lambda actually bundles (esbuild) before anything
+  # is considered for deploy. No AWS credentials needed for this job.
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - uses: aws-actions/setup-sam@v2
+      # SAM's esbuild bundler looks for `esbuild` on PATH, not in node_modules — without this
+      # it fails with "Cannot find esbuild" even though npm ci just installed it locally.
+      - run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: sam build
+
+  # Only on a real push to master (not PRs) — deploys the already-validated build, then a
+  # lightweight smoke test confirms the live API actually responds afterward.
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write   # required for OIDC — no AWS keys stored anywhere
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - uses: aws-actions/setup-sam@v2
+      # Same PATH fix as the build job above — see comment there.
+      - run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::405114130882:role/github-actions-medical-scanner-deploy
+          aws-region: us-east-1
+      - run: sam build
+      - name: Generate deploy config
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          FREE_TIER_DAILY_LIMIT: ${{ secrets.FREE_TIER_DAILY_LIMIT }}
+        run: node scripts/gen-samconfig.js
+      - run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+      - name: Run DB migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        # migrate.js is idempotent (CREATE TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING
+        # throughout) — safe to run on every deploy, not just ones that touch schema.
+        run: node migrate.js
+
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://k6tdi2uzoh.execute-api.us-east-1.amazonaws.com/api/health)
+          echo "GET /api/health -> $code"
+          test "$code" = "200"
+      - name: Auth-gated routes exist (401, not 404)
+        run: |
+          for route in "GET /api/auth/me" "PUT /api/auth/me" "GET /api/auth/keys"; do
+            method=$(echo "$route" | cut -d' ' -f1)
+            path=$(echo "$route" | cut -d' ' -f2)
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "https://k6tdi2uzoh.execute-api.us-east-1.amazonaws.com$path")
+            echo "$method $path -> $code"
+            test "$code" = "401"
+          done

@@ -4,7 +4,12 @@ Description: Medical Scanner Backend — Express on AWS Lambda
 
 Globals:
   Function:
-    Timeout: 60
+    # 120s: a large discharge summary's Gemini extraction call can take 35-60s. The AI proxy
+    # (/api/ai/generate, /api/device/register) is reached via a Lambda Function URL (below),
+    # NOT the HttpApi routes, specifically because API Gateway HTTP APIs hard-cap their
+    # integration timeout at 30s (not configurable, regardless of this Lambda timeout) — a
+    # phone calling AI proxy through API Gateway would get a 504 well before Gemini replies.
+    Timeout: 120
     MemorySize: 512
     Runtime: nodejs20.x
     Architectures:
@@ -94,6 +99,17 @@ Resources:
           Properties:
             Path: /
             Method: ANY
+      # Second entry point to the SAME function/code, reached directly (no API Gateway hop) —
+      # used only by the Android app's AI proxy calls (/api/ai/generate, /api/device/register)
+      # so slow Gemini responses aren't killed by API Gateway's non-negotiable 30s ceiling.
+      # AuthType NONE = no extra AWS-level gate; Express's own requireAuth/requireDeviceOrUser
+      # middleware is still the real authorization layer, exactly as it is behind API Gateway.
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins: ['*']
+          AllowMethods: ['*']
+          AllowHeaders: ['*']
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -112,3 +128,8 @@ Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL — set this as DEFAULT_SERVER_URL in the Android app
     Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  FunctionUrl:
+    Description: >-
+      Lambda Function URL (bypasses API Gateway's 30s integration timeout) — set this as the
+      Android app's AI proxy base URL (BackendAiClient / DeviceIdentity), NOT DEFAULT_SERVER_URL.
+    Value: !GetAtt MedicalScannerFunctionUrl.FunctionUrl
