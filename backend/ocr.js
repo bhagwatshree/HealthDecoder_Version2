@@ -87,7 +87,7 @@ Ensure that:
 1. Patient name is identified accurately.
 2. The date of the report/prescription is extracted and formatted as YYYY-MM-DD. DO NOT guess the date. Look for date labels like 'Date', 'Report Date', 'Collected', 'Reported', 'Dated', or signature date. If no date is visible in the text, return null.
 3. Comments, instructions, remarks, or advice given in the report/prescription are extracted accurately.
-4. If it's a prescription or mentions medicines, extract all medications as an array of objects.
+4. If it's a prescription or mentions medicines, extract all medications as an array of objects. If a medicine has an explicit printed or handwritten start/end date (e.g. "start from 20/10/26", "TILL 20/8/26"), fill "startDate"/"endDate" as absolute YYYY-MM-DD dates — but leave them null for vague endings like "till follow-up" or "continue".
 5. If the doctor mentions recommended future tests (e.g. "Thyroid test in 3 months", "Check CBC next week"), extract them in recommendedTests.
 6. Extract test results and findings in the "testResults" field.
    - For lab tests (like Blood Tests): extract all parameters into the "parameters" array.
@@ -107,7 +107,10 @@ The response MUST be a JSON object with the following schema:
       "duration": "Duration (e.g. 5 days, 1 month, or null)",
       "isOptional": false, // boolean, set to true if it is taken optionally/as needed/sos
       "weeklySchedule": ["Everyday"], // array of strings (e.g. ["Mon", "Thu"], ["Everyday"], or ["As Needed"]) representing when to take it
-      "notes": "Any special instructions or empty string"
+      "notes": "Any special instructions or empty string",
+      "startDate": "YYYY-MM-DD or null — ONLY when the page states an explicit future start date (e.g. 'start from 20/10/26'); leave null when the medicine starts on the report date itself",
+      "endDate": "YYYY-MM-DD or null. Search the WHOLE medication row/entry — an instruction sentence, frequency line, or remarks column — for an explicit calendar end date ('TILL 20/10/26', 'TILL 20 OCT 2026'). A row can print BOTH a generic day-count ('Duration: 90 Days') AND a separate, more specific calendar date in its instructions; when both appear, the calendar date is the real stop date and MUST be used here, not the generic count. Only fall back to computing from a relative day-count (same method as dueDate below, e.g. today 2026-08-13 and '90 days' -> 2026-11-11) when NO explicit calendar date is printed anywhere on the row. Leave null for vague endings like 'till follow-up' or 'continue' — 'duration' already captures that text",
+      "intervalDays": "Number or null — ONLY for a dosing cadence that repeats every N days without lining up to the same weekday each week: 'once in 15 days'->15, 'every 3 days'->3, 'alternate day'->2. Leave null for a daily medicine or one tied to specific weekday(s) (captured in weeklySchedule instead), and do not confuse with a course-length day-count"
     }
   ],
   "recommendedTests": [
@@ -1656,6 +1659,37 @@ async function sarvamTranslate(text, targetCode, apiKey) {
   } catch (e) {
     console.warn('Sarvam translate failed:', e.message);
     return null;
+  }
+}
+
+/**
+ * Translates arbitrary-length text to a target language via Sarvam, for the /api/ai/translate
+ * proxy route (the app no longer talks to Sarvam directly). Splits on blank lines so each
+ * paragraph stays under sarvamTranslate's ~900-char limit, and degrades gracefully: any
+ * missing key, unsupported language, or upstream failure returns the ORIGINAL text rather
+ * than throwing, since translation is a nice-to-have and must never break the caller.
+ */
+export async function translateText(text, targetLanguage = 'English') {
+  if (!text || !text.trim()) return text;
+  if (!targetLanguage || targetLanguage.toLowerCase() === 'english') return text;
+
+  try {
+    const targetCode = LANGUAGE_CODES[targetLanguage.toLowerCase()] || 'en-IN';
+    if (targetCode === 'en-IN') return text;
+
+    const apiKey = process.env.SARVAM_API_KEY;
+    if (!apiKey || apiKey === 'YOUR_SARVAM_API_KEY_HERE') return text;
+
+    const paragraphs = text.split('\n\n');
+    const translated = await Promise.all(paragraphs.map(async (p) => {
+      if (!p.trim()) return p;
+      const result = await sarvamTranslate(p, targetCode, apiKey);
+      return result || p;
+    }));
+    return translated.join('\n\n');
+  } catch (e) {
+    console.warn('translateText failed:', e.message);
+    return text;
   }
 }
 

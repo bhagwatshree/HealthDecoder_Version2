@@ -26,28 +26,63 @@ val localProperties = Properties().apply {
 fun localProp(key: String): String = (localProperties.getProperty(key) ?: "")
 
 android {
-    namespace = "com.example.medicalscanner"
+    namespace = "com.healthdecoder.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.example.medicalscanner"
+        applicationId = "com.healthdecoder.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.3.0"
 
-        buildConfigField("String", "GEMINI_API_KEY", "\"${localProp("GEMINI_API_KEY")}\"")
-        buildConfigField("String", "SARVAM_API_KEY", "\"${localProp("SARVAM_API_KEY")}\"")
+        // No Gemini/Sarvam API keys are embedded here anymore — all AI calls are proxied
+        // through the backend (see BackendAiClient), so the APK ships with zero provider keys.
         // OAuth "Web application" client ID (Google Cloud Console) backing native Google
         // Sign-In (Credential Manager requires a *server* client ID, even on Android) — the
         // same client ID as the backend's GOOGLE_CLIENT_ID. See local.properties.example.
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${localProp("GOOGLE_WEB_CLIENT_ID")}\"")
+
+        // Phone (MSISDN) OTP sign-in. OFF by default: every OTP is a billed SMS, and the app
+        // works fully on-device without an account. Flip to true (or set PHONE_AUTH_ENABLED=true
+        // in local.properties) to bring the phone login/register screens back.
+        buildConfigField(
+            "boolean", "PHONE_AUTH_ENABLED",
+            (localProp("PHONE_AUTH_ENABLED").takeIf { it.isNotBlank() } ?: "false")
+        )
+        // Google Sign-In / Gmail sync. OFF by default: both were built and tested against the
+        // developer's own account, and their behavior/cost at real public scale (OAuth consent
+        // screen status, Gmail API quota) hasn't been verified. See FeatureFlags.kt.
+        buildConfigField(
+            "boolean", "GOOGLE_SIGNIN_ENABLED",
+            (localProp("GOOGLE_SIGNIN_ENABLED").takeIf { it.isNotBlank() } ?: "false")
+        )
+        buildConfigField(
+            "boolean", "GMAIL_SYNC_ENABLED",
+            (localProp("GMAIL_SYNC_ENABLED").takeIf { it.isNotBlank() } ?: "false")
+        )
+    }
+
+    // Release signing reads from local.properties (gitignored, per-machine) so the keystore
+    // password never touches source control. Falls back to debug signing when those keys are
+    // blank (e.g. a fresh checkout without the keystore) so `assembleRelease` still builds for
+    // local testing — that fallback build just can't be uploaded to Play Console as-is.
+    val hasReleaseSigning = localProp("RELEASE_STORE_PASSWORD").isNotBlank()
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(localProp("RELEASE_STORE_FILE"))
+                storePassword = localProp("RELEASE_STORE_PASSWORD")
+                keyAlias = localProp("RELEASE_KEY_ALIAS")
+                keyPassword = localProp("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

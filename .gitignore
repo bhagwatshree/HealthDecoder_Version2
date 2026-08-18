@@ -14,6 +14,9 @@ android-app/.kotlin/
 android-app/build/
 android-app/local.properties
 android-app/app/google-services.json
+android-app/keystore/
+*.jks
+*.keystore
 android-app/app/build/
 *.iml
 .idea/caches
@@ -35,6 +38,7 @@ captures/
 # --- AWS SAM ---
 backend/.aws-sam/
 samconfig.toml
+backend/github-secrets.txt
 
 # --- Local debug captures ---
 scratch_*.txt

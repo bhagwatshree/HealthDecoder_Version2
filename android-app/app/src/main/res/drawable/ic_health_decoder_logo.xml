@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Background Glow Circle -->
+    <path
+        android:fillColor="#0D1B2A"
+        android:pathData="M100,10 C149.7,10 190,50.3 190,100 C190,149.7 149.7,190 100,190 C50.3,190 10,149.7 10,100 C10,50.3 50.3,10 100,10 Z" />
+
+    <!-- Medical Cross & H Monogram Stem (Left) -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M52,50 L68,50 L68,82 L90,82 L90,50 L106,50 L106,150 L90,150 L90,98 L68,98 L68,150 L52,150 Z" />
+
+    <!-- Decoder Waveform / Medical Pulse Central Accent -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M64,86 L94,86 L94,94 L64,94 Z" />
+
+    <!-- D Monogram Curve with Integrated Cross & Data Bars (Right) -->
+    <path
+        android:fillColor="#0288D1"
+        android:pathData="M116,50 L146,50 C167,50 180,65 180,100 C180,135 167,150 146,150 L116,150 L116,134 L144,134 C156,134 164,124 164,100 C164,76 156,66 144,66 L116,66 Z" />
+
+    <!-- Pulse Signal / Health Decoder Line -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M30,100 L65,100 L72,82 L80,122 L90,70 L98,108 L104,96 L108,100 L170,100 L170,105 L106,105 L101,98 L97,118 L89,58 L79,132 L73,95 L63,105 L30,105 Z" />
+</vector>
