@@ -32,35 +32,40 @@ enum AppSettings {
 
     static var isLoggedIn: Bool { (authToken?.isEmpty == false) }
 
-    /// Logs out. Deliberately does NOT clear the Gemini/Sarvam key overrides — they fall back
-    /// to `BuildKeys` so scanning still works logged-out, just without a personal quota.
+    /// Logs out. There's no local key state to clear anymore — AI calls always go through the
+    /// backend proxy (`BackendAiClient`), which falls back to the anonymous device pool once
+    /// logged out. Mirrors `AppSettings.kt`'s `logout()`.
     static func logout() {
         authToken = nil
         userEmail = nil
     }
 
-    // MARK: - API keys (stored override; falls back to the build-embedded key)
+    // MARK: - Anonymous device identity (no OTP/login)
 
-    private static let keychainGeminiKey = "gemini_api_key"
-    private static let keychainSarvamKey = "sarvam_api_key"
+    // Backs the AI proxy (BackendAiClient / DeviceIdentity): phone OTP sign-in is optional/off
+    // by default, so most installs authenticate as this anonymous device instead of a real
+    // user. installId is generated once and never changes; deviceToken is what DeviceIdentity
+    // gets back from POST /api/device/register using that id. Mirrors AppSettings.kt's
+    // getOrCreateInstallId/getDeviceToken/setDeviceToken. deviceToken lives in the Keychain
+    // (not UserDefaults, unlike Android's plaintext prefs) — same security improvement as
+    // authToken above, not a behavior change.
+    private static let keyInstallId = "device_install_id"
+    private static let keychainDeviceToken = "device_auth_token"
 
-    static var geminiKey: String {
-        get {
-            let stored = KeychainStore.get(keychainGeminiKey)?.trimmingCharacters(in: .whitespaces) ?? ""
-            return stored.isEmpty ? BuildKeys.geminiApiKey : stored
-        }
-        set { KeychainStore.set(newValue.trimmingCharacters(in: .whitespaces), forKey: keychainGeminiKey) }
+    static func getOrCreateInstallId() -> String {
+        if let stored = defaults.string(forKey: keyInstallId), !stored.isEmpty { return stored }
+        let fresh = UUID().uuidString
+        defaults.set(fresh, forKey: keyInstallId)
+        return fresh
     }
 
-    static var sarvamKey: String {
-        get {
-            let stored = KeychainStore.get(keychainSarvamKey)?.trimmingCharacters(in: .whitespaces) ?? ""
-            return stored.isEmpty ? BuildKeys.sarvamApiKey : stored
+    static var deviceToken: String? {
+        get { KeychainStore.get(keychainDeviceToken) }
+        set {
+            if let newValue { KeychainStore.set(newValue, forKey: keychainDeviceToken) }
+            else { KeychainStore.delete(keychainDeviceToken) }
         }
-        set { KeychainStore.set(newValue.trimmingCharacters(in: .whitespaces), forKey: keychainSarvamKey) }
     }
-
-    static var hasGeminiKey: Bool { !geminiKey.isEmpty }
 
     // MARK: - Server URL (mirrors IPConfigScreen's override)
 

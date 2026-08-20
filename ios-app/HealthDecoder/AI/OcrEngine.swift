@@ -83,7 +83,7 @@ enum OcrEngine {
             pageCount: images.count, part: part, totalParts: totalParts
         )
         do {
-            let raw = try await GeminiClient.shared.generateFromImages(prompt: prompt, images: images)
+            let raw = try await BackendAiClient.shared.generateFromImages(prompt: prompt, images: images)
             return parse(GeminiClient.stripJsonFences(raw))
         } catch {
             print("OcrEngine chunk \(part)/\(totalParts) failed: \(error)")

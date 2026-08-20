@@ -1,14 +1,16 @@
 import Foundation
 
-/// API keys baked into the app at build time from `Secrets.xcconfig` (gitignored, per-machine),
-/// via Info.plist substitution — the iOS analog of Android's `BuildKeys.kt`/`BuildConfig` pair.
+/// Non-secret build-time config embedded in the app at build time from `Secrets.xcconfig`
+/// (gitignored, per-machine), via Info.plist substitution — the iOS analog of Android's
+/// `BuildKeys.kt`/`BuildConfig` pair.
 ///
-/// SECURITY: keys compiled into an app bundle CAN be extracted by anyone who has the .ipa.
-/// This is acceptable for private testing only. Before any public/App Store release, move
-/// these to a server-side proxy or rotate/revoke them (same caveat as the Android build).
+/// Gemini/Sarvam API keys used to live here too; they've been removed — the app no longer
+/// embeds any AI provider key, since all AI calls are proxied through the backend (see
+/// `AI/BackendAiClient.swift` — `POST /api/ai/generate`, `/api/ai/tts`, `/api/ai/translate`).
 enum BuildKeys {
-    static let geminiApiKey: String = infoPlistString("GEMINI_API_KEY")
-    static let sarvamApiKey: String = infoPlistString("SARVAM_API_KEY")
+    // Google OAuth "Web application" client ID — powers native Sign in with Google. Not a
+    // secret: it identifies the app to Google's consent screen, it doesn't authorize anything
+    // by itself.
     static let googleWebClientID: String = infoPlistString("GOOGLE_WEB_CLIENT_ID")
 
     private static func infoPlistString(_ key: String) -> String {

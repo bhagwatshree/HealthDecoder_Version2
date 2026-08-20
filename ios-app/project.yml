@@ -34,11 +34,11 @@ targets:
         NSMicrophoneUsageDescription: "Medical Assist uses the microphone so you can ask the AI assistant questions by voice."
         NSSpeechRecognitionUsageDescription: "Medical Assist transcribes your spoken questions so the AI assistant can answer them."
         ITSAppUsesNonExemptEncryption: false
-        # Backend-issued values, substituted from Secrets.xcconfig at build time (see that
+        # Backend-issued value, substituted from Secrets.xcconfig at build time (see that
         # file's comments) — read at runtime via BuildKeys.swift, mirroring Android's
-        # BuildConfig-generated BuildKeys.kt.
-        GEMINI_API_KEY: "$(GEMINI_API_KEY)"
-        SARVAM_API_KEY: "$(SARVAM_API_KEY)"
+        # BuildConfig-generated BuildKeys.kt. GEMINI_API_KEY/SARVAM_API_KEY used to be here too;
+        # removed — all AI calls now go through the backend's /api/ai/* proxy
+        # (AI/BackendAiClient.swift), so no provider key ships in the app bundle.
         GOOGLE_WEB_CLIENT_ID: "$(GOOGLE_WEB_CLIENT_ID)"
         # Deep-link scheme for the future Gmail-linking OAuth flow (Phase 4) — mirrors
         # Android's `medicalscanner://oauth2` / `oauth2-link` handling in Navigation.kt.

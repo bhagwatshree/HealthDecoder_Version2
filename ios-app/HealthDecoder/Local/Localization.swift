@@ -126,7 +126,9 @@ enum RemoteUiTranslations {
 }
 
 /// Maps language names to BCP-47 tags for speech recognition and text-to-speech, and
-/// translates AI-generated content via Sarvam — port of `util/LanguageUtil.kt`.
+/// translates AI-generated content via the backend's `/api/ai/translate` proxy (`BackendAiClient`)
+/// — port of `util/LanguageUtil.kt`. No Sarvam key ships on the device; the backend resolves it
+/// server-side per call.
 enum LanguageUtil {
     private static let bcp47 = [
         "English": "en-IN", "Hindi": "hi-IN", "Marathi": "mr-IN", "Gujarati": "gu-IN",
@@ -138,49 +140,16 @@ enum LanguageUtil {
 
     static func locale(for language: String) -> Locale { Locale(identifier: tag(for: language)) }
 
-    /// Translates English text into the target language via Sarvam. Returns the input
-    /// unchanged when the target is English, the key is missing, or the call fails — the
-    /// same graceful degradation the Android version has.
+    /// Translates English text into the target language via the backend's `/api/ai/translate`
+    /// proxy. Returns the input unchanged when the target is English or the call fails — the
+    /// same graceful degradation the Android version has (the backend itself also falls back to
+    /// the original text on any failure, so this is really just the English/empty-text
+    /// short-circuit plus whatever `BackendAiClient.translate` already guarantees).
     static func translate(_ text: String, to targetLanguage: String) async -> String {
         guard targetLanguage.caseInsensitiveCompare("English") != .orderedSame, !text.isEmpty else {
             return text
         }
-        let apiKey = AppSettings.sarvamKey
-        guard !apiKey.isEmpty else { return text }
-
-        // Paragraph-chunked, matching Android — Sarvam has a per-request length limit.
-        var translated: [String] = []
-        for paragraph in text.components(separatedBy: "\n\n") {
-            if paragraph.trimmingCharacters(in: .whitespaces).isEmpty {
-                translated.append("")
-            } else {
-                translated.append(await translateChunk(paragraph, to: tag(for: targetLanguage), apiKey: apiKey))
-            }
-        }
-        return translated.joined(separator: "\n\n")
-    }
-
-    private static func translateChunk(_ text: String, to targetCode: String, apiKey: String) async -> String {
-        guard let url = URL(string: "https://api.sarvam.ai/translate") else { return text }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "api-subscription-key")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "input": text,
-            "source_language_code": "en-IN",
-            "target_language_code": targetCode,
-            "model": "sarvam-translate:v1"
-        ])
-
-        guard
-            let (data, response) = try? await URLSession.shared.data(for: request),
-            let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let result = root["translated_text"] as? String
-        else { return text }
-        return result
+        return await BackendAiClient.shared.translate(text: text, to: targetLanguage)
     }
 }
 

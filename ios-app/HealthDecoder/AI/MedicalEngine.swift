@@ -14,7 +14,7 @@ enum MedicalEngine {
         If no medicine name is legible, return exactly: NONE
         """
         do {
-            let raw = try await GeminiClient.shared.generateFromImages(prompt: prompt, images: [(imageData, mimeType)])
+            let raw = try await BackendAiClient.shared.generateFromImages(prompt: prompt, images: [(imageData, mimeType)])
             var cleaned = GeminiClient.stripJsonFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.hasPrefix("\""), cleaned.hasSuffix("\""), cleaned.count > 1 {
                 cleaned = String(cleaned.dropFirst().dropLast())
@@ -52,15 +52,15 @@ enum MedicalEngine {
 
         let result: MedicineInfo
         do {
-            let raw = try await GeminiClient.shared.generateText(prompt: prompt)
+            let raw = try await BackendAiClient.shared.generateText(prompt: prompt)
             let json = GeminiClient.stripJsonFences(raw)
             if let data = json.data(using: .utf8), let decoded = try? JSONDecoder().decode(MedicineInfo.self, from: data) {
                 result = decoded
             } else {
-                result = MedicineInfo(category: "Unknown", basicUse: "Could not look up this medicine. Check your internet connection or Gemini API key.")
+                result = MedicineInfo(category: "Unknown", basicUse: "Could not look up this medicine. Check your internet connection and try again.")
             }
         } catch {
-            result = MedicineInfo(category: "Unknown", basicUse: "Could not look up this medicine. Check your internet connection or Gemini API key.")
+            result = MedicineInfo(category: "Unknown", basicUse: "Could not look up this medicine. Check your internet connection and try again.")
         }
 
         cache[key] = result
@@ -103,11 +103,11 @@ enum MedicalEngine {
         do {
             let answer: String
             if let imageData {
-                answer = try await GeminiClient.shared.generateFromImages(
+                answer = try await BackendAiClient.shared.generateFromImages(
                     prompt: prompt, images: [(imageData, "image/jpeg")]
                 )
             } else {
-                answer = try await GeminiClient.shared.generateText(prompt: prompt)
+                answer = try await BackendAiClient.shared.generateText(prompt: prompt)
             }
             let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return (trimmed, "ai") }
@@ -122,7 +122,7 @@ enum MedicalEngine {
         guard !reports.isEmpty else {
             return "I don't have any of your reports on file yet. Once you scan a report, I can help explain your results, medicines, and doctor's notes. For any medical concern, please consult your doctor.\(disclaimer)"
         }
-        let suffix = "(Offline mode — check your connection or Gemini API key for smarter answers.)\(disclaimer)"
+        let suffix = "(Offline mode — check your connection for smarter answers.)\(disclaimer)"
         let q = question.lowercased()
         if q.contains("doctor") || q.contains("specialist") || q.contains("physician") {
             return "Based on your saved reports, you should discuss abnormal findings with a suitable specialist (e.g. Cardiologist for lipids/heart, Endocrinologist for thyroid, Diabetologist for high sugar). \(suffix)"
@@ -175,7 +175,7 @@ enum MedicalEngine {
         {"interpretation":"3-4 sentences","specialistRecommendations":[{"specialist":"","reason":"","urgency":"Routine|Soon|Urgent"}],"prescriptionAlignment":{"aligned":true,"score":"Good|Partial|Poor|N/A","analysis":"","flags":[]},"sideEffects":[{"medicine":"","commonEffects":[],"seriousEffects":[],"severity":"Mild|Moderate|Serious","tips":""}]}
         Only recommend specialists if findings warrant it. Empty sideEffects if no medications.
         """
-        if let raw = try? await GeminiClient.shared.generateText(prompt: prompt),
+        if let raw = try? await BackendAiClient.shared.generateText(prompt: prompt),
            let data = GeminiClient.stripJsonFences(raw).data(using: .utf8),
            let decoded = try? JSONDecoder().decode(HealthInsights.self, from: data) {
             return decoded
@@ -362,7 +362,7 @@ enum MedicalEngine {
         Use short paragraphs and dashed lists ("- item"). If a section has nothing, keep it and say so briefly.
         """
 
-        if let raw = try? await GeminiClient.shared.generateText(prompt: prompt),
+        if let raw = try? await BackendAiClient.shared.generateText(prompt: prompt),
            let data = GeminiClient.stripJsonFences(raw).data(using: .utf8),
            var decoded = try? JSONDecoder().decode(DetailedAnalysis.self, from: data),
            !decoded.sections.isEmpty {

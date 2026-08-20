@@ -17,12 +17,22 @@ enum APIError: Error, LocalizedError {
 }
 
 /// `URLSession`-based client for the same backend Android talks to (`network/NetworkModule.kt`).
-/// The backend is used only for account auth and issuing an AI-provider key + quota — every
-/// scan/chat/analysis call goes straight from this phone to Google/Sarvam (`GeminiClient`),
-/// never through this API.
+/// Handles account auth and everything else on the API Gateway host. AI calls (scan/chat/
+/// analysis/tts/translate) do NOT go through this class — they use `BackendAiClient`, which
+/// talks to a separate host (`aiProxyBaseURL` below), never straight to Google/Sarvam. No
+/// provider key ships on the device; the backend resolves a pooled or BYOK key per call.
 final class APIClient {
     static let shared = APIClient()
     private init() {}
+
+    /// Lambda Function URL (same function/code as the API Gateway host above) — used ONLY by
+    /// the AI proxy (`BackendAiClient` / `DeviceIdentity`), NEVER by the rest of `APIClient`.
+    /// Mirrors Android's `NetworkModule.AI_PROXY_BASE_URL`: API Gateway HTTP APIs hard-cap their
+    /// integration timeout at 30s (not configurable, regardless of the Lambda's own timeout),
+    /// and a large discharge summary's Gemini extraction call can take 35-60s — that would get
+    /// killed by the 30s ceiling even though the Lambda itself finishes fine. The Function URL
+    /// bypasses API Gateway entirely, so the only limit is the Lambda's own (120s) timeout.
+    static let aiProxyBaseURL = "https://wbbcabjmv7uyjsxegna633yqhe0mwhvs.lambda-url.us-east-1.on.aws/"
 
     private let session = URLSession(configuration: {
         let config = URLSessionConfiguration.default
