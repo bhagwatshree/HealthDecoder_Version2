@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Future test the doctor recommended, extracted from a scan.
 struct RecommendedTest: Codable, Equatable {
@@ -63,8 +64,10 @@ enum OcrEngine {
         for (index, chunk) in chunks.enumerated() {
             // The device-OCR hint text belongs to the first page; only give it to chunk 1.
             let ref = index == 0 ? localOcrText : ""
+            // Cover identity regions before these pages leave the device.
+            let prepared = await redactForUpload(chunk)
             if let result = await scanChunk(
-                images: chunk, referenceText: ref, scanType: scanType,
+                images: prepared, referenceText: ref, scanType: scanType,
                 reportCategory: reportCategory, part: index + 1, totalParts: chunks.count
             ) {
                 results.append(result)
@@ -72,6 +75,34 @@ enum OcrEngine {
         }
         if results.isEmpty { return localFallback(localOcrText: localOcrText, scanType: scanType) }
         return mergeChunks(results)
+    }
+
+    /// Runs each page through the on-device recognizer and paints out identity regions before
+    /// upload — the iOS half of `PiiRedactor`'s contract, mirroring the same step in
+    /// `OcrEngine.kt`'s `preparePages`.
+    ///
+    /// A page with nothing to redact is forwarded BYTE-FOR-BYTE, so it never pays a round of JPEG
+    /// generation loss on a document the model must read small printed values from. A page that
+    /// can't be decoded or recognised is also forwarded unchanged: failing open matches Android,
+    /// and the alternative — dropping the page — would silently lose clinical data.
+    private static func redactForUpload(
+        _ pages: [(data: Data, mimeType: String)]
+    ) async -> [(data: Data, mimeType: String)] {
+        var prepared: [(data: Data, mimeType: String)] = []
+        for page in pages {
+            guard let image = UIImage(data: page.data) else { prepared.append(page); continue }
+            let lines = await TextRecognizer.recognizeLines(image)
+            guard
+                !lines.isEmpty,
+                let redacted = PiiRedactor.redactedCopy(of: image, lines: lines),
+                let jpeg = redacted.jpegData(compressionQuality: 0.92)
+            else {
+                prepared.append(page)
+                continue
+            }
+            prepared.append((data: jpeg, mimeType: "image/jpeg"))
+        }
+        return prepared
     }
 
     private static func scanChunk(
