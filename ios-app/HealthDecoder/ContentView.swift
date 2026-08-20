@@ -1,10 +1,16 @@
 import SwiftUI
 
-/// Root gate: first-run medical disclaimer, then Login or the main app, based on
-/// `SessionStore.isLoggedIn`. Mirrors `Navigation.kt`'s `MainNavigation()` startup logic
-/// (English-only disclaimer for Phase 1 — other languages plug in once localization lands).
+/// Root gate: the first-run medical disclaimer, then the app.
+///
+/// SIGN-IN IS OPTIONAL and deliberately not a gate. Records, reminders and AI analysis are all
+/// on-device or served by the anonymous device token, so the app is fully usable signed-out —
+/// which is exactly what Android does with `PHONE_AUTH_ENABLED` off: "the app opens straight to
+/// Home and never asks the user to sign in" (see `FeatureFlags.kt`).
+///
+/// This used to show `LoginScreen` whenever `session.isLoggedIn` was false, which made an account
+/// mandatory on iOS and unreachable at that: account creation was broken, so a new user hit a
+/// login wall they could not pass. Login now lives behind Home's sign-in banner instead.
 struct ContentView: View {
-    @EnvironmentObject private var session: SessionStore
     @State private var disclaimerAccepted = AppSettings.isDisclaimerAccepted
 
     var body: some View {
@@ -14,10 +20,8 @@ struct ContentView: View {
                     AppSettings.isDisclaimerAccepted = true
                     disclaimerAccepted = true
                 }
-            } else if session.isLoggedIn {
-                MainRootView()
             } else {
-                LoginScreen()
+                MainRootView()
             }
         }
     }
