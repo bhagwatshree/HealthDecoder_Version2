@@ -16,7 +16,7 @@ final class Database {
     private var db: OpaquePointer?
     /// Serializes every access — SQLite connections aren't safe for concurrent use from
     /// multiple threads without this (Room handles this internally; we do it explicitly).
-    private let queue = DispatchQueue(label: "com.example.medicalscanner.db")
+    private let queue = DispatchQueue(label: "com.healthdecoder.app.db")
 
     private init() {
         queue.sync { openAndMigrate() }

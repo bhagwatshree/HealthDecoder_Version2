@@ -18,7 +18,7 @@ struct LoginScreen: View {
                         .frame(width: 88, height: 88)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                         .padding(.top, 40)
-                    Text(tr("Medical Assist"))
+                    Text(tr("Health Decoder"))
                         .font(.largeTitle.bold())
 
                     VStack(spacing: 12) {

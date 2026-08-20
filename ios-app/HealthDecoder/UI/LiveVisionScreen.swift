@@ -117,7 +117,7 @@ struct LiveVisionScreen: View {
 final class CameraController: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
-    private let sessionQueue = DispatchQueue(label: "com.example.medicalscanner.camera")
+    private let sessionQueue = DispatchQueue(label: "com.healthdecoder.app.camera")
     private var captureCompletion: ((Data?) -> Void)?
 
     func configure() {

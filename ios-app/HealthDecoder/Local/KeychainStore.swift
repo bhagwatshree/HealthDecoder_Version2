@@ -10,7 +10,7 @@ import Security
 /// backup or restorable onto a different device — matching Android's per-device, Keystore-tied
 /// passphrase semantics (a backup zip is only restorable on the same physical device).
 enum KeychainStore {
-    private static let service = "com.example.medicalscanner"
+    private static let service = "com.healthdecoder.app"
 
     static func set(_ value: String, forKey key: String) {
         let data = Data(value.utf8)
