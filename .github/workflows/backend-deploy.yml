@@ -34,11 +34,11 @@ jobs:
       - run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - run: sam build
 
-  # Only on a real push to master (not PRs) — deploys the already-validated build, then a
-  # lightweight smoke test confirms the live API actually responds afterward.
+  # On a real push to master, or a manual run via the Actions tab (not PRs) — deploys the
+  # already-validated build, then a lightweight smoke test confirms the live API responds.
   deploy:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

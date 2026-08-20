@@ -2,6 +2,7 @@ package com.healthdecoder.app.ui
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -187,14 +189,43 @@ fun parseRoutine(frequencyStr: String, dosageStr: String): List<Pair<String, Boo
  * twice-weekly medicine like Tolvaptan (Wed & Sat) reminds only on those days.
  */
 fun parseWeekdays(weeklySchedule: List<String>, frequencyStr: String): List<Int> {
-    val abbrToCode = linkedMapOf(
-        "sun" to 1, "mon" to 2, "tue" to 3, "wed" to 4, "thu" to 5, "fri" to 6, "sat" to 7
-    )
-    val hay = (weeklySchedule.joinToString(" ") + " " + frequencyStr).lowercase()
-    val days = sortedSetOf<Int>()
-    for ((abbr, code) in abbrToCode) if (hay.contains(abbr)) days.add(code)
-    // Only honour named days; "twice a week" with no day, or a plain daily schedule, stays daily.
-    return days.toList()
+    // The structured schedule is the doctor's actual answer to "which days"; the free-text
+    // frequency is consulted only when the schedule names none. Reading BOTH is what caused a
+    // 5-days-a-week anticoagulant to remind on its two off days: the frequency text names those
+    // days precisely BECAUSE they are excluded, and merging the two strings lost that.
+    //
+    // Note there is deliberately no early return for "Everyday": the model emits it as the
+    // schema's default even for a medicine whose frequency text then says "Thursday & Sunday
+    // off", and short-circuiting on it skipped the only place the restriction was written down.
+    // It names no weekday, so it simply falls through to the frequency text and, when that names
+    // none either, to the empty "no restriction" answer it meant in the first place.
+    val fromSchedule = activeWeekdaysIn(weeklySchedule.joinToString(" "))
+    if (fromSchedule.isNotEmpty()) return fromSchedule
+    return activeWeekdaysIn(frequencyStr)
+}
+
+/** Day names, matched on word boundaries so "month" is not a Monday and "saturation" not a Saturday. */
+private val DAY_PATTERNS: List<Pair<Int, Regex>> = listOf(
+    1 to """sun(day)?""", 2 to """mon(day)?""", 3 to """tue(s|sday)?""", 4 to """wed(nesday)?""",
+    5 to """thu(r|rs|rsday)?""", 6 to """fri(day)?""", 7 to """sat(urday)?"""
+).map { (code, body) -> code to Regex("""\b${body}s?\b""", RegexOption.IGNORE_CASE) }
+
+/** Wording that flips named days from "take on these" to "skip these". */
+private val DAY_EXCLUSION = Regex("""\b(off|except|excluding|omit|skip|holiday)\b""", RegexOption.IGNORE_CASE)
+
+/**
+ * Days named in [text] as Calendar.DAY_OF_WEEK codes (1=Sun..7=Sat), honouring exclusion wording:
+ * "Thursday & Sunday off" yields Mon/Tue/Wed/Fri/Sat, not Thursday and Sunday. An empty result
+ * means the text named no days at all, which callers read as "every day".
+ */
+private fun activeWeekdaysIn(text: String): List<Int> {
+    if (text.isBlank()) return emptyList()
+    val named = DAY_PATTERNS.filter { (_, pattern) -> pattern.containsMatchIn(text) }.map { it.first }.toSet()
+    if (named.isEmpty()) return emptyList()
+    if (!DAY_EXCLUSION.containsMatchIn(text)) return named.sorted()
+    // Every day excluded is not a real prescription; fall back to the named days rather than
+    // returning empty, which callers would read as "every day" — the opposite of what it says.
+    return ((1..7).toSet() - named).sorted().ifEmpty { named.sorted() }
 }
 
 fun parseFoodInstruction(frequencyStr: String, dosageStr: String): String? {
@@ -664,10 +695,84 @@ fun PendingTestCard(
     }
 }
 
+/**
+ * Several reports extracted from ONE scanned document, drawn inside a single box so it is obvious
+ * they came from the same PDF and were only split apart for detail. The patient and date are
+ * stated once in the header instead of on every panel, and the source file is named because that
+ * is the least ambiguous way to say "these are the same piece of paper".
+ *
+ * Each panel inside is still its own tappable card opening its own detail screen — the split is
+ * real, this only makes the relationship visible.
+ */
+@Composable
+fun ReportGroupCard(
+    reports: List<MedicalReport>,
+    onReportClick: (String) -> Unit
+) {
+    val first = reports.first()
+    val sourceName = reports.firstNotNullOfOrNull { r -> r.sourceFiles.firstOrNull()?.name?.takeIf { it.isNotBlank() } }
+
+    // The box is read by its OUTLINE, not by its fill. A tinted fill alone cannot work in both
+    // themes from one value — light enough to show against a white page is invisible against a
+    // near-black one, and vice versa — so the grouping is carried by a definite primary-tinted
+    // border, with the fill only lifting the container a step away from the page behind it.
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
+                .compositeOver(MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp))
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Patient: ${first.patientName ?: "Unknown Patient"}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = first.reportDate ?: tr("No Date"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = listOfNotNull(
+                        sourceName,
+                        "${reports.size} ${tr("reports from this document")}"
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            reports.forEach { report ->
+                ReportItemCard(
+                    report = report,
+                    onClick = { onReportClick(report.id) },
+                    insideGroup = true
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun ReportItemCard(
     report: MedicalReport,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // True when this card is a panel INSIDE a document group. The group already draws the outline
+    // and states the patient and date once in its header, so a panel repeats neither: a second
+    // border inside the first reads as a box in a box, and repeating "Patient / date" on every
+    // panel of one PDF is most of what made that list hard to read. A standalone report keeps
+    // both, so every top-level row in the list carries the same outline whether it came from a
+    // document with one report or eight.
+    insideGroup: Boolean = false
 ) {
     Card(
         modifier = Modifier
@@ -675,7 +780,9 @@ fun ReportItemCard(
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = if (insideGroup) null
+            else BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
     ) {
         Column(
             modifier = Modifier
@@ -703,18 +810,20 @@ fun ReportItemCard(
                 )
             }
 
-            Text(
-                text = "Patient: ${report.patientName ?: "Unknown Patient"}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            if (!insideGroup) {
+                Text(
+                    text = "Patient: ${report.patientName ?: "Unknown Patient"}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
 
-            Text(
-                text = report.reportDate ?: tr("No Date"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+                Text(
+                    text = report.reportDate ?: tr("No Date"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             if (report.medications.isNotEmpty()) {
                 FlowRow(
@@ -838,16 +947,12 @@ fun getActiveDaysFromSchedule(weeklySchedule: List<String>, frequencyStr: String
         return listOf(false, false, false, false, false, false, false)
     }
     
-    val mon = freq.contains("mon") || freq.contains("monday")
-    val tue = freq.contains("tue") || freq.contains("tuesday")
-    val wed = freq.contains("wed") || freq.contains("wednesday")
-    val thu = freq.contains("thu") || freq.contains("thursday")
-    val fri = freq.contains("fri") || freq.contains("friday")
-    val sat = freq.contains("sat") || freq.contains("saturday")
-    val sun = freq.contains("sun") || freq.contains("sunday")
-    
-    if (mon || tue || wed || thu || fri || sat || sun) {
-        return listOf(mon, tue, wed, thu, fri, sat, sun)
+    // Same negation-aware parse the reminders use, so the day dots shown here can never disagree
+    // with the days the alarms actually fire on. Codes are Calendar's (1=Sun..7=Sat); this list
+    // is Mon..Sun.
+    val activeCodes = activeWeekdaysIn(frequencyStr)
+    if (activeCodes.isNotEmpty()) {
+        return listOf(2, 3, 4, 5, 6, 7, 1).map { it in activeCodes }
     }
     
     if (freq.contains("alternate") || freq.contains("alt")) {

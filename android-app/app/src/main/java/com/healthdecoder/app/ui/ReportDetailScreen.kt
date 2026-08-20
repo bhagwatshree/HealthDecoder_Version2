@@ -154,6 +154,12 @@ fun ReportDetailScreen(
                     editRawText = fetchedReport.extractedText ?: ""
                     editMedications.clear()
                     editMedications.addAll(fetchedReport.medications)
+
+                    // The comparison and insights cards are built on demand rather than at scan
+                    // time, so opening a report is what pays for them — and only once. The report
+                    // above is already on screen while this runs; the cards appear when ready.
+                    runCatching { LocalRepository.ensureEnrichment(context, reportId) }
+                        .getOrNull()?.let { report = it }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -266,7 +272,6 @@ fun ReportDetailScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
-                .appWatermark()
         ) {
             if (isLoading && report == null) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -482,25 +487,28 @@ fun ReportDetailScreen(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Row(
+                            // Patient/date and the report type are stacked, not placed side by side.
+                            // A real report type runs long ("Diagnostic Lab Report (Haemogram,
+                            // PT/INR, Urine Routine, Biochemistry, Electrolytes)"), and as the
+                            // right-hand item of a SpaceBetween row its pill grew back across the
+                            // patient's name and covered it. On its own line it can use the full
+                            // width and wrap normally.
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(
-                                        text = "Patient: ${currentReport.patientName ?: "Unknown"}",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "Date: ${currentReport.reportDate ?: "Unknown"}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                Text(
+                                    text = "Patient: ${currentReport.patientName ?: "Unknown"}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Date: ${currentReport.reportDate ?: "Unknown"}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
@@ -511,7 +519,8 @@ fun ReportDetailScreen(
                                         text = currentReport.reportType ?: "Other",
                                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp
                                     )
                                 }
                             }
@@ -710,12 +719,21 @@ fun ReportDetailScreen(
                                                     horizontalArrangement = Arrangement.End,
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    Text(text = param.referenceRange.ifEmpty { "-" }, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    // The range yields width to the badge instead of the
+                                                    // other way round: a long range ("1,50,000 - 4,50,000")
+                                                    // used to squeeze the pill until its label wrapped.
+                                                    Text(
+                                                        text = param.referenceRange.ifEmpty { "-" },
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        textAlign = TextAlign.End,
+                                                        modifier = Modifier.weight(1f, fill = false)
+                                                    )
 
                                                     val paramStatus = param.status ?: ""
                                                     if (paramStatus.isNotEmpty()) {
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        StatusBadge(paramStatus)
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        StatusBadge(paramStatus, compact = true)
                                                     }
                                                 }
                                             }
@@ -753,7 +771,9 @@ fun ReportDetailScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFE8EAF6)
+                                // Same reason as the alignment card below: tint over the theme's
+                                // surface so this stays readable in dark mode.
+                                containerColor = statusContainerColor(MaterialTheme.colorScheme.primary)
                             ),
                             shape = RoundedCornerShape(14.dp)
                         ) {
@@ -803,11 +823,13 @@ fun ReportDetailScreen(
                                         color = Color(0xFF3F51B5)
                                     )
                                     hi.specialistRecommendations.forEach { rec ->
-                                        val (bgColor, textColor, urgencyIcon) = when (rec.urgency.lowercase()) {
-                                            "urgent" -> Triple(Color(0xFFFFEBEE), Color(0xFFB71C1C), "🚨")
-                                            "soon" -> Triple(Color(0xFFFFF8E1), Color(0xFFE65100), "⚠️")
-                                            else -> Triple(Color(0xFFE8F5E9), Color(0xFF1B5E20), "📅")
+                                        val (urgencyAccent, urgencyIcon) = when (rec.urgency.lowercase()) {
+                                            "urgent" -> ClinicalStatus.High to "🚨"
+                                            "soon" -> ClinicalStatus.Low to "⚠️"
+                                            else -> ClinicalStatus.Normal to "📅"
                                         }
+                                        val bgColor = statusContainerColor(urgencyAccent)
+                                        val textColor = urgencyAccent
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -920,12 +942,18 @@ fun ReportDetailScreen(
                     // ══ CARD 2: Prescription Alignment Check ════════════════════════════════
                     val alignment = hi?.prescriptionAlignment
                     if (alignment != null && alignment.score != "N/A") {
-                        val (cardBg, headerColor, iconVec) = when (alignment.score.lowercase()) {
-                            "good" -> Triple(Color(0xFFE8F5E9), Color(0xFF2E7D32), Icons.Default.CheckCircle)
-                            "partial" -> Triple(Color(0xFFFFF3E0), Color(0xFFE65100), Icons.Default.Warning)
-                            "poor" -> Triple(Color(0xFFFFEBEE), Color(0xFFC62828), Icons.Default.Cancel)
-                            else -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, Icons.Default.Info)
+                        // Accent tinted OVER the theme's surface, never a fixed pale hex: a pale
+                        // fill stays pale in dark theme while the body text stays white, which is
+                        // what made this card's own text unreadable there. Same treatment as the
+                        // comparison card above — see statusContainerColor.
+                        val (accent, iconVec) = when (alignment.score.lowercase()) {
+                            "good" -> ClinicalStatus.Normal to Icons.Default.CheckCircle
+                            "partial" -> ClinicalStatus.Low to Icons.Default.Warning
+                            "poor" -> ClinicalStatus.High to Icons.Default.Cancel
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant to Icons.Default.Info
                         }
+                        val cardBg = statusContainerColor(accent)
+                        val headerColor = accent
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = cardBg),
@@ -1057,15 +1085,11 @@ fun ReportDetailScreen(
                                 sideEffects.forEach { se ->
                                     val isExpanded = expandedMed == se.medicine
                                     val severityColor = when (se.severity.lowercase()) {
-                                        "serious" -> Color(0xFFC62828)
-                                        "moderate" -> Color(0xFFE65100)
-                                        else -> Color(0xFF2E7D32)
+                                        "serious" -> ClinicalStatus.High
+                                        "moderate" -> ClinicalStatus.Low
+                                        else -> ClinicalStatus.Normal
                                     }
-                                    val severityBg = when (se.severity.lowercase()) {
-                                        "serious" -> Color(0xFFFFEBEE)
-                                        "moderate" -> Color(0xFFFFF3E0)
-                                        else -> Color(0xFFE8F5E9)
-                                    }
+                                    val severityBg = statusContainerColor(severityColor)
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1163,7 +1187,7 @@ fun ReportDetailScreen(
                                                             modifier = Modifier
                                                                 .fillMaxWidth()
                                                                 .clip(RoundedCornerShape(6.dp))
-                                                                .background(Color(0xFFFFEBEE))
+                                                                .background(statusContainerColor(ClinicalStatus.High))
                                                                 .padding(8.dp),
                                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                                             verticalAlignment = Alignment.Top
@@ -1178,7 +1202,7 @@ fun ReportDetailScreen(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
                                                             .clip(RoundedCornerShape(6.dp))
-                                                            .background(Color(0xFFE3F2FD))
+                                                            .background(statusContainerColor(MaterialTheme.colorScheme.primary))
                                                             .padding(8.dp),
                                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                                         verticalAlignment = Alignment.Top
@@ -1396,52 +1420,11 @@ fun ReportDetailScreen(
                         }
                     }
 
-                    // Collapsible Raw OCR Text
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { rawTextExpanded = !rawTextExpanded },
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = tr("Raw Transcribed Text"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Icon(
-                                    imageVector = if (rawTextExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = tr("Toggle text")
-                                )
-                            }
-                            
-                            AnimatedVisibility(visible = rawTextExpanded) {
-                                Column(modifier = Modifier.padding(top = 12.dp)) {
-                                    if (isEditing) {
-                                        OutlinedTextField(
-                                            value = editRawText,
-                                            onValueChange = { editRawText = it },
-                                            modifier = Modifier.fillMaxWidth().height(200.dp),
-                                            label = { Text(tr("Raw Text")) }
-                                        )
-                                    } else {
-                                        Text(
-                                            text = currentReport.extractedText.takeIf { !it.isNullOrBlank() } ?: "No raw text available.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                            lineHeight = 16.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // The raw transcription is deliberately NOT shown: it's a machine artifact
+                    // (on-device OCR output), not something a patient reads or edits. It is still
+                    // stored and still matters — it backs full-text search and the token-overlap
+                    // duplicate check in LocalStore — so [editRawText] keeps round-tripping the
+                    // saved value untouched rather than dropping it on edit.
                 }
             }
 

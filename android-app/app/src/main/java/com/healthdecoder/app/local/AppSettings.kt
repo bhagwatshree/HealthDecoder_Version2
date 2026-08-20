@@ -32,7 +32,7 @@ object AppSettings {
         val json = prefs(context).getString(KEY_FAMILY, null) ?: return emptyList()
         return runCatching {
             gson.fromJson<List<FamilyProfile>>(json, object : TypeToken<List<FamilyProfile>>() {}.type)
-        }.getOrNull() ?: emptyList()
+        }.getOrNull().orEmpty().mapNotNull { it.sanitizedProfile() }
     }
 
     fun setFamilyProfiles(context: Context, list: List<FamilyProfile>) {
@@ -491,4 +491,27 @@ object AppSettings {
     fun setEmailSearchPrompt(context: Context, prompt: String) {
         prefs(context).edit().putString(KEY_EMAIL_SEARCH_PROMPT, prompt).apply()
     }
+}
+
+/**
+ * Gson fills fields reflectively and ignores Kotlin nullability, so a profile stored by an older
+ * build -- before `relation` or `avatarEmoji` existed -- comes back with null in a field declared
+ * non-null. Nothing fails at parse time; it fails at the first read, and LocalRepository does
+ * `it.name.trim().lowercase()` over these, which is the exact shape of the crash that took down
+ * Reminders and Doctor Appointments (see MedicineScheduleStore.sanitized).
+ *
+ * Unlike a schedule, a profile is NOT dropped when its name is missing: it still carries an id and
+ * may own reports, so losing it would lose the link to that person's records. A blank name is
+ * already filtered downstream where it matters.
+ */
+private fun FamilyProfile?.sanitizedProfile(): FamilyProfile? {
+    val p = this ?: return null
+    return p.copy(
+        id = (p.id as String?) ?: "",
+        name = (p.name as String?) ?: "",
+        relation = (p.relation as String?) ?: "",
+        avatarEmoji = (p.avatarEmoji as String?) ?: "",
+        sex = (p.sex as String?) ?: "",
+        dateOfBirth = (p.dateOfBirth as String?) ?: ""
+    )
 }

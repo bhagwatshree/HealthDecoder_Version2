@@ -163,7 +163,6 @@ fun ProfileScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .appWatermark()
                 .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

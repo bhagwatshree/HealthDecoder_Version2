@@ -30,9 +30,9 @@ data class MedicineSchedule(
     val endDate: String? = null,
     // "Once every N days" dosing cadence (e.g. "once in 15 days" -> 15) for a medicine that
     // doesn't land on the same weekday every week, so [daysOfWeek] can't express it. Null for the
-    // ordinary daily/weekly-named-day case — those already work via [runsOn]. When set, this
-    // OVERRIDES daysOfWeek for the "is it due today" check (see [isDueToday]): counting exact
-    // days from [startDate] is the only way to know if today is dose N, day N+1, etc.
+    // ordinary daily/weekly-named-day case — those already work via [runsOn]. This NARROWS the
+    // "is it due today" check alongside daysOfWeek rather than replacing it (see [isDueToday]):
+    // counting exact days from [startDate] is the only way to know if today is dose N, day N+1.
     val intervalDays: Int? = null
 )
 
@@ -67,12 +67,24 @@ fun MedicineSchedule.isDueByInterval(todayIso: String): Boolean {
 }
 
 /**
- * True if this schedule's medicine is due TODAY, combining the day-of-week script ([runsOn]) with
- * the every-N-days cadence ([isDueByInterval]) — [intervalDays], when set, replaces the
- * day-of-week check entirely (a 15-day cycle isn't tied to any particular weekday).
+ * True if this schedule's medicine is due TODAY. Both constraints must hold: the day-of-week
+ * script ([runsOn]) AND the every-N-days cadence ([isDueByInterval]).
+ *
+ * The interval used to REPLACE the day check, on the reasoning that a 15-day cycle isn't tied to
+ * any weekday — true for that case, but it silently discarded the days whenever both were present.
+ * An interval of 1 was the worst of it: "every 1 days" is trivially true every day, so a medicine
+ * prescribed "5 days a week, Thursday & Sunday off" reminded on Thursday while its own reminder
+ * screen correctly listed the five days it should run. The days were right, stored and displayed;
+ * nothing ever asked them.
+ *
+ * An interval of 1 is exactly what "no interval" already means, so it is not treated as a
+ * constraint at all. Where a genuine multi-day cycle and named days coexist, requiring both can
+ * only withhold a dose the script didn't call for — never add one it didn't.
  */
-fun MedicineSchedule.isDueToday(dayOfWeek: Int, todayIso: String): Boolean =
-    if (intervalDays != null && intervalDays > 0) isDueByInterval(todayIso) else runsOn(dayOfWeek)
+fun MedicineSchedule.isDueToday(dayOfWeek: Int, todayIso: String): Boolean {
+    val cadenceApplies = intervalDays != null && intervalDays > 1
+    return runsOn(dayOfWeek) && (!cadenceApplies || isDueByInterval(todayIso))
+}
 
 object MedicineScheduleStore {
     private const val PREFS_NAME = "medicine_schedules"
@@ -122,9 +134,10 @@ object MedicineScheduleStore {
             .getString(KEY_SCHEDULES, null) ?: return emptyList()
         return try {
             val type = object : TypeToken<List<MedicineSchedule>>() {}.type
-            gson.fromJson<List<MedicineSchedule>>(json, type) ?: emptyList()
+            gson.fromJson<List<MedicineSchedule>>(json, type).orEmpty().mapNotNull { it.sanitized() }
         } catch (e: Exception) { emptyList() }
     }
+
 
     fun saveAll(context: Context, schedules: List<MedicineSchedule>) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -337,3 +350,31 @@ object MedicineScheduleStore {
         )
     }
 }
+
+/**
+ * Gson fills fields by reflection and knows nothing about Kotlin nullability: a stored record
+ * missing "patientName" (or carrying an explicit null) produces a MedicineSchedule whose
+ * non-null String field IS null. Nothing complains until the first use, which crashed the whole
+ * app — dedupeCanonical() calling patientName.trim() took out the Reminders and Doctor
+ * Appointments screens on open, as a bare NPE with no hint that JSON was involved.
+ *
+ * So every schedule is repaired here, at the one place untrusted JSON becomes objects, rather
+ * than defending at each of the dozens of use sites. A record with no usable medicine name is
+ * dropped: it can't be displayed, matched or scheduled, and keeping it only moves the crash.
+ */
+internal fun MedicineSchedule?.sanitized(): MedicineSchedule? {
+    val s = this ?: return null
+    val name = str(s.medicineName).trim()
+    if (name.isEmpty()) return null
+    return s.copy(
+        medicineName = name,
+        patientName = str(s.patientName),
+        dosage = str(s.dosage),
+        frequency = str(s.frequency),
+        // A null slot value is as fatal as a null field once something reads .enabled.
+        slots = s.slots.orEmpty().filterValues { it != null }
+    )
+}
+
+/** Non-null String is a subtype of String?, so this accepts the field and catches Gson's null. */
+private fun str(value: String?): String = value ?: ""

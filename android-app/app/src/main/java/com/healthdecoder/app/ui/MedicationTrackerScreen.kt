@@ -159,7 +159,6 @@ fun MedicationTrackerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .appWatermark()
         ) {
             OutlinedTextField(
                 value = searchQuery,

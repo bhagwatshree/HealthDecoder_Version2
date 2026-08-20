@@ -35,6 +35,21 @@ object ClinicalStatus {
         "normal", "improved", "good", "completed" -> Normal
         else -> Neutral
     }
+
+    /**
+     * One letter for a lab result's status, for the results table where the badge shares a row
+     * with the name, value and reference range. Spelled out, "NORMAL" was wide enough to wrap
+     * inside its own pill — rendering as "NORM AL", and on a narrow row as a column of single
+     * letters — so the colour, which is the part actually read at a glance, arrived attached to
+     * unreadable text. Returns null for a status with no accepted abbreviation, so the caller can
+     * fall back to the full word rather than invent a letter for it.
+     */
+    fun shortLabelFor(status: String): String? = when (status.trim().lowercase()) {
+        "high" -> "H"
+        "low" -> "L"
+        "normal" -> "N"
+        else -> null
+    }
 }
 
 /**
@@ -48,18 +63,31 @@ object ClinicalStatus {
 fun statusContainerColor(color: Color, alpha: Float = 0.14f): Color =
     color.copy(alpha = alpha).compositeOver(MaterialTheme.colorScheme.surface)
 
-/** Small colored pill for a status word ("HIGH", "LOW", "WORSENED", "COMPLETED", ...). */
+/**
+ * Small colored pill for a status word ("HIGH", "LOW", "WORSENED", "COMPLETED", ...).
+ *
+ * [compact] shortens High/Low/Normal to H/L/N for tight rows such as the lab results table, where
+ * the pill competes with the parameter name, value and reference range for width. The colour is
+ * unchanged, and a status with no accepted abbreviation still shows its full word.
+ */
 @Composable
-fun StatusBadge(text: String, color: Color = ClinicalStatus.colorFor(text), modifier: Modifier = Modifier) {
+fun StatusBadge(
+    text: String,
+    color: Color = ClinicalStatus.colorFor(text),
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    val label = (if (compact) ClinicalStatus.shortLabelFor(text) else null) ?: text.uppercase()
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(color.copy(alpha = 0.15f))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .padding(horizontal = if (compact) 7.dp else 8.dp, vertical = 3.dp)
     ) {
         Text(
-            text.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-            color = color, letterSpacing = 0.3.sp
+            label, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+            color = color, letterSpacing = 0.3.sp,
+            maxLines = 1
         )
     }
 }

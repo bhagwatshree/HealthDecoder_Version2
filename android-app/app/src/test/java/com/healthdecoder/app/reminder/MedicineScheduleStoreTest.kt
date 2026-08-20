@@ -53,15 +53,44 @@ class MedicineScheduleStoreTest {
         assertTrue(schedule(startDate = null, intervalDays = 15).isDueByInterval("2026-08-01"))
     }
 
-    // isDueToday: intervalDays, when set, REPLACES the day-of-week check entirely — a 15-day
-    // cycle isn't tied to any particular weekday, so daysOfWeek is irrelevant once interval is set.
+    // isDueToday requires BOTH the day-of-week script and the interval cadence.
+    //
+    // This reverses what this file asserted before, deliberately. The old rule was "interval
+    // replaces the day check", which is right for a genuine 15-day cycle (not weekday-aligned, so
+    // daysOfWeek is null anyway and nothing is lost) but discarded explicitly prescribed days
+    // whenever both happened to be set. A real Acitrom script — "5 days a week, Thursday & Sunday
+    // off" — came back with correct days AND intervalDays=1, and since "every 1 days" is true
+    // every day, the days were never consulted and it reminded on Thursday.
+    //
+    // When the two disagree, the named days win by being required: for an anticoagulant, a
+    // reminder that withholds a dose the script didn't call for is a safer error than one that
+    // adds a dose the doctor excluded.
     @Test
-    fun `isDueToday uses interval instead of day-of-week when interval is set`() {
+    fun `isDueToday requires both the named days and the interval`() {
         val s = schedule(daysOfWeek = listOf(2, 3), startDate = "2026-07-30", intervalDays = 15)
-        // Calendar.DAY_OF_WEEK 5 = Thursday, not in daysOfWeek — but today IS an interval day.
-        assertTrue(s.isDueToday(dayOfWeek = 5, todayIso = "2026-08-14"))
-        // An interval day check that fails should also fail isDueToday, day-of-week notwithstanding.
+        // 2026-08-14 IS an interval day, but Thursday (5) is not one of the named days.
+        assertFalse(s.isDueToday(dayOfWeek = 5, todayIso = "2026-08-14"))
+        // A named day that isn't an interval day is likewise not due.
         assertFalse(s.isDueToday(dayOfWeek = 2, todayIso = "2026-08-13"))
+    }
+
+    @Test
+    fun `interval alone still governs when no days are named`() {
+        val s = schedule(daysOfWeek = null, startDate = "2026-07-30", intervalDays = 15)
+        assertTrue(s.isDueToday(dayOfWeek = 5, todayIso = "2026-08-14"))
+        assertFalse(s.isDueToday(dayOfWeek = 5, todayIso = "2026-08-13"))
+    }
+
+    /**
+     * The reported defect. "Every 1 days" is what having no interval already means, so it must not
+     * count as a constraint — otherwise it silently overrides the days the doctor did name.
+     */
+    @Test
+    fun `an interval of one day does not override the named days`() {
+        val s = schedule(daysOfWeek = listOf(2, 3, 4, 6, 7), startDate = "2026-08-13", intervalDays = 1)
+        assertFalse(s.isDueToday(dayOfWeek = 5, todayIso = "2026-08-20")) // Thursday: excluded
+        assertFalse(s.isDueToday(dayOfWeek = 1, todayIso = "2026-08-23")) // Sunday: excluded
+        assertTrue(s.isDueToday(dayOfWeek = 2, todayIso = "2026-08-17"))  // Monday: due
     }
 
     @Test

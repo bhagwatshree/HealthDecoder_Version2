@@ -8,6 +8,11 @@ import { decrypt } from './auth.js';
 // keep any single free user from starving the others sharing their pool key.
 export const FREE_TIER_DAILY_LIMIT = parseInt(process.env.FREE_TIER_DAILY_LIMIT || '50', 10);
 
+// Google's free-tier requests-PER-MINUTE cap, per Gemini API key/project (distinct from
+// FREE_TIER_DAILY_LIMIT, which is OUR OWN per-caller daily cap). Default 15 matches the
+// common Gemini Flash free-tier RPM — set GEMINI_RPM_LIMIT if your model's differs.
+const GEMINI_RPM_LIMIT = parseInt(process.env.GEMINI_RPM_LIMIT || '15', 10);
+
 // Comma-separated in GEMINI_API_KEYS — scales automatically with however many keys are
 // listed there (no code change needed to add/remove pool capacity, just update the secret).
 function loadGeminiKeyPool() {
@@ -15,21 +20,59 @@ function loadGeminiKeyPool() {
   return raw.split(',').map(k => k.trim()).filter(Boolean);
 }
 
+function keyHash(key) {
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+function currentMinuteBucket() {
+  return new Date(Math.floor(Date.now() / 60000) * 60000);
+}
+
+// 2% of calls opportunistically sweep buckets old enough to never be queried again, so this
+// purely-rate-limiting table doesn't grow without bound. No cron needed for a table this cheap.
+function sweepOldMinuteBuckets() {
+  if (Math.random() >= 0.02) return;
+  db.query(`DELETE FROM gemini_key_minute_usage WHERE minute_bucket < now() - interval '10 minutes'`)
+    .catch((err) => console.error('Failed to sweep gemini_key_minute_usage:', err.message));
+}
+
 /**
- * Deterministically (stickily) assigns each caller to ONE key in the pool, based on a hash
- * of their id (a logged-in user's id, or an anonymous device's device_id — this function
- * doesn't care which, it just needs a stable string). This is the "multiple free tiers"
- * mechanism: if you configure N Gemini API keys (each its own Google Cloud project, each
- * with its own free-tier quota) in GEMINI_API_KEYS, callers are spread evenly across the N
- * projects. A heavy caller only ever consumes the daily quota of THEIR assigned project, not
- * everyone else's — so adding more keys to the pool directly raises how many the free tier supports.
+ * Picks a Gemini key from the pool for one call, honoring each key's own free-tier RPM cap.
+ * Starts from the caller's stickily-hashed "home" key (same spread-daily-quota-across-projects
+ * idea as before), but if that key is already at GEMINI_RPM_LIMIT requests this minute, spills
+ * over to the next key in the pool instead of bursting past it — a single caller chunking a
+ * large document into many back-to-back calls no longer has to stay under one key's RPM alone.
+ * Returns { key: null, rateLimited: true } only if EVERY pooled key is at capacity this minute.
  */
-function assignedHouseKey(id) {
+async function reserveGeminiKey(id) {
   const pool = loadGeminiKeyPool();
-  if (pool.length === 0) return null;
+  if (pool.length === 0) return { key: null, rateLimited: false };
+
   const hash = crypto.createHash('sha256').update(String(id)).digest();
-  const index = hash.readUInt32BE(0) % pool.length;
-  return pool[index];
+  const startIndex = hash.readUInt32BE(0) % pool.length;
+  const minuteBucket = currentMinuteBucket();
+
+  for (let i = 0; i < pool.length; i++) {
+    const keyIndex = (startIndex + i) % pool.length;
+    const key = pool[keyIndex];
+    // Atomic reserve-a-slot: only increments (and only returns a row) if the bucket is still
+    // under the cap, so concurrent Lambda invocations can't both "win" the last slot.
+    const result = await db.query(
+      `INSERT INTO gemini_key_minute_usage (key_hash, minute_bucket, request_count)
+       VALUES ($1, $2, 1)
+       ON CONFLICT (key_hash, minute_bucket) DO UPDATE
+         SET request_count = gemini_key_minute_usage.request_count + 1
+         WHERE gemini_key_minute_usage.request_count < $3
+       RETURNING request_count`,
+      [keyHash(key), minuteBucket, GEMINI_RPM_LIMIT]
+    );
+    if (result.rows.length > 0) {
+      sweepOldMinuteBuckets();
+      return { key, keyIndex, rateLimited: false };
+    }
+  }
+  sweepOldMinuteBuckets();
+  return { key: null, rateLimited: true };
 }
 
 // The day-rollover check is done entirely in SQL (comparing Postgres's own CURRENT_DATE to
@@ -123,9 +166,17 @@ export async function resolveKeysForDevice(deviceId) {
   if (usageToday >= FREE_TIER_DAILY_LIMIT) {
     return { geminiKey: null, sarvamKey, billedTo: 'none', usageToday, limit: FREE_TIER_DAILY_LIMIT, quotaExceeded: true };
   }
+  // Reserve a key BEFORE counting the issuance — a caller that only hit the per-minute RPM
+  // ceiling (every pooled key momentarily saturated) hasn't actually used any quota yet, so
+  // it shouldn't burn a day's issuance for a call that never reached Gemini.
+  const { key, keyIndex, rateLimited } = await reserveGeminiKey(deviceId);
+  if (rateLimited) {
+    return { geminiKey: null, sarvamKey, billedTo: 'none', usageToday, limit: FREE_TIER_DAILY_LIMIT, quotaExceeded: false, rateLimited: true };
+  }
   const newCount = await incrementUsageForDevice(deviceId);
   return {
-    geminiKey: assignedHouseKey(deviceId),
+    geminiKey: key,
+    geminiKeyIndex: keyIndex,
     sarvamKey,
     billedTo: 'free',
     usageToday: newCount,
@@ -177,14 +228,17 @@ export async function resolveKeysForUser(user) {
   }
 
   if (user.plan === 'premium') {
+    const { key, keyIndex, rateLimited } = await reserveGeminiKey(user.id);
     return {
-      geminiKey: assignedHouseKey(user.id),
+      geminiKey: key,
+      geminiKeyIndex: keyIndex,
       sarvamKey,
       plan: user.plan,
       billedTo: 'premium',
       usageToday: await peekUsage(user.id),
       limit: FREE_TIER_DAILY_LIMIT,
       quotaExceeded: false,
+      rateLimited,
     };
   }
 
@@ -201,10 +255,27 @@ export async function resolveKeysForUser(user) {
     };
   }
 
+  // Same ordering as resolveKeysForDevice: reserve the per-minute slot before counting the
+  // day's issuance, so an RPM-saturated pool doesn't cost the user part of their daily quota.
+  const { key, keyIndex, rateLimited } = await reserveGeminiKey(user.id);
+  if (rateLimited) {
+    return {
+      geminiKey: null,
+      sarvamKey,
+      plan: user.plan,
+      billedTo: 'none',
+      usageToday,
+      limit: FREE_TIER_DAILY_LIMIT,
+      quotaExceeded: false,
+      rateLimited: true,
+    };
+  }
+
   const newCount = await incrementUsage(user.id);
 
   return {
-    geminiKey: assignedHouseKey(user.id),
+    geminiKey: key,
+    geminiKeyIndex: keyIndex,
     sarvamKey,
     plan: user.plan,
     billedTo: 'free',

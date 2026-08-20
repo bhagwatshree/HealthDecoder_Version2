@@ -766,7 +766,92 @@ app.post('/api/device/register', async (req, res) => {
 // Accepts either a real user session or an anonymous device token (see requireDeviceOrUser).
 const MAX_AI_PROXY_IMAGES = 30;
 
+// How long a finished answer stays cached and reusable for a retried identical request (same
+// caller, operation, prompt and images) instead of paying Gemini again.
+const AI_RESPONSE_CACHE_TTL_MINUTES = 10;
+
+// A 'pending' (in-progress) row older than this is treated as an abandoned leader — its Lambda
+// invocation died or was killed without ever finishing — rather than one still genuinely
+// working, and becomes safe to reclaim. Kept just under the Lambda's own hard 120s timeout
+// (template.yaml): nothing can still legitimately be running past that.
+const AI_LEADER_STALE_SECONDS = 110;
+
+function aiRequestHash(callerId, operation, prompt, imgs) {
+  const h = crypto.createHash('sha256');
+  h.update(String(callerId));
+  h.update('|');
+  h.update(operation);
+  h.update('|');
+  h.update(prompt);
+  for (const img of imgs) h.update('|').update(img.data);
+  return h.digest('hex');
+}
+
+/**
+ * Single-flight de-dup for identical AI requests. The Function URL has no request timeout, but
+ * its API Gateway fallback hard-caps at 30s (not configurable) while a slow Gemini call can take
+ * up to ~60s — so API Gateway can 504 the client while the Lambda keeps running to completion
+ * (and gets billed) in the background. The client's retry used to land as a brand new request
+ * and pay a second time. Now: only the first request for a given hash ("the leader") is allowed
+ * to call Gemini; anyone else asking about the exact same content while that's in flight is told
+ * to check back shortly (see the 202 branch below) instead of starting a second paid call.
+ *
+ * Returns one of:
+ *   { done: true, text }          — an answer already exists and is fresh; use it, no Gemini call.
+ *   { done: false, leader: true } — caller must call Gemini, then finishAiRequest()/releaseAiRequest().
+ *   { done: false, leader: false }— someone else is already working on this; wait and retry.
+ */
+async function claimAiRequest(requestHash) {
+  const peek = await db.query(
+    `SELECT status, response_text,
+            (status = 'done' AND completed_at > now() - ($2 || ' minutes')::interval) AS fresh_done,
+            (status = 'pending' AND started_at > now() - ($3 || ' seconds')::interval) AS active_pending
+     FROM ai_response_cache WHERE request_hash = $1`,
+    [requestHash, AI_RESPONSE_CACHE_TTL_MINUTES, AI_LEADER_STALE_SECONDS]
+  );
+  const row = peek.rows[0];
+  if (row?.fresh_done) return { done: true, text: row.response_text };
+  if (row?.active_pending) return { done: false, leader: false };
+
+  // No row, or a done/pending row old enough to be considered expired/abandoned — try to
+  // become the leader. The WHERE clause re-checks the same freshness conditions atomically,
+  // so a race between two concurrent callers can only let one of them win.
+  const claim = await db.query(
+    `INSERT INTO ai_response_cache (request_hash, status, started_at, response_text)
+     VALUES ($1, 'pending', now(), NULL)
+     ON CONFLICT (request_hash) DO UPDATE SET
+       status = 'pending', started_at = now(), response_text = NULL
+     WHERE (ai_response_cache.status = 'done' AND ai_response_cache.completed_at <= now() - ($2 || ' minutes')::interval)
+        OR (ai_response_cache.status = 'pending' AND ai_response_cache.started_at <= now() - ($3 || ' seconds')::interval)
+     RETURNING request_hash`,
+    [requestHash, AI_RESPONSE_CACHE_TTL_MINUTES, AI_LEADER_STALE_SECONDS]
+  );
+  if (claim.rows.length > 0) return { done: false, leader: true };
+  // Lost the race between the peek and the claim — someone else just became leader.
+  return { done: false, leader: false };
+}
+
+async function finishAiRequest(requestHash, text) {
+  await db.query(
+    `UPDATE ai_response_cache SET status = 'done', response_text = $2, completed_at = now() WHERE request_hash = $1`,
+    [requestHash, text]
+  );
+  if (Math.random() < 0.02) {
+    db.query(`DELETE FROM ai_response_cache WHERE status = 'done' AND completed_at < now() - interval '30 minutes'`)
+      .catch((err) => console.error('Failed to sweep ai_response_cache:', err.message));
+  }
+}
+
+// Called when the leader fails BEFORE reaching Gemini (rate-limited, quota exceeded, error) —
+// removes the 'pending' row immediately so the next attempt can retry right away instead of
+// waiting out the full AI_LEADER_STALE_SECONDS thinking someone else is still working on it.
+function releaseAiRequest(requestHash) {
+  db.query(`DELETE FROM ai_response_cache WHERE request_hash = $1 AND status = 'pending'`, [requestHash])
+    .catch((err) => console.error('Failed to release ai_response_cache row:', err.message));
+}
+
 app.post('/api/ai/generate', requireDeviceOrUser, async (req, res) => {
+  let requestHash = null;
   try {
     const { prompt, images, operation } = req.body || {};
     if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -782,11 +867,30 @@ app.post('/api/ai/generate', requireDeviceOrUser, async (req, res) => {
       }
     }
 
+    const op = operation || 'scan';
+    const callerId = req.auth.kind === 'user' ? req.auth.user.id : req.auth.deviceId;
+    requestHash = aiRequestHash(callerId, op, prompt, imgs);
+
+    const claim = await claimAiRequest(requestHash);
+    if (claim.done) {
+      return res.json({ text: claim.text });
+    }
+    if (!claim.leader) {
+      return res.status(202).set('Retry-After', '3').json({ processing: true });
+    }
+
     const resolved = req.auth.kind === 'user'
       ? await resolveKeysForUser(req.auth.user)
       : await resolveKeysForDevice(req.auth.deviceId);
 
+    if (resolved.rateLimited) {
+      releaseAiRequest(requestHash);
+      return res.status(503).set('Retry-After', '10').json({
+        error: 'High demand right now. Please try again in a few seconds.',
+      });
+    }
     if (resolved.quotaExceeded || !resolved.geminiKey) {
+      releaseAiRequest(requestHash);
       return res.status(429).json({
         error: 'Daily free analysis limit reached. Try again tomorrow, or add your own Gemini key in Settings.',
       });
@@ -800,13 +904,17 @@ app.post('/api/ai/generate', requireDeviceOrUser, async (req, res) => {
 
     const deviceRowId = req.auth.kind === 'device' ? await getOrCreateDevice(req.auth.deviceId) : null;
     const response = await runWithUsageContext(
-      { userId: req.auth.kind === 'user' ? req.auth.user.id : null, deviceId: deviceRowId, operation: operation || 'scan' },
+      { userId: req.auth.kind === 'user' ? req.auth.user.id : null, deviceId: deviceRowId, operation: op, keyIndex: resolved.geminiKeyIndex },
       () => trackGemini(ai, { model: process.env.GEMINI_MODEL || 'gemini-3.6-flash', contents: parts })
     );
 
-    res.json({ text: (response.text || '').trim() });
+    const text = (response.text || '').trim();
+    await finishAiRequest(requestHash, text);
+
+    res.json({ text });
   } catch (error) {
     console.error('AI proxy error:', error);
+    if (requestHash) releaseAiRequest(requestHash);
     res.status(502).json({ error: 'The analysis service is temporarily unavailable. Please try again shortly.' });
   }
 });

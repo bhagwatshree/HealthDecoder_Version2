@@ -175,7 +175,6 @@ fun DiscoveryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .appWatermark()
         ) {
             // Category Tabs
             TabRow(
