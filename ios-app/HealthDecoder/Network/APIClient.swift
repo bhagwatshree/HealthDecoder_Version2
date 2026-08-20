@@ -123,6 +123,12 @@ final class APIClient {
 
     // MARK: - Generic request helpers
 
+    /// A GET that carries no auth header — for the handful of public endpoints (translations,
+    /// health tips) that must work before, and without, sign-in.
+    func unauthenticatedGet<Response: Decodable>(_ path: String) async throws -> Response {
+        try await send(path: path, method: "GET", body: Optional<String>.none, authenticated: false)
+    }
+
     private func get<Response: Decodable>(_ path: String) async throws -> Response {
         try await send(path: path, method: "GET", body: Optional<String>.none, authenticated: true)
     }

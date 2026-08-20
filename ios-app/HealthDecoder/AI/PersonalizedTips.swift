@@ -27,11 +27,11 @@ struct HealthTip: Equatable {
 /// advice does not belong here. Entirely rule-based, no AI call — free and instant, and never
 /// invents a tip for a test it doesn't recognize.
 ///
-/// Direct port of `ai/PersonalizedTips.kt`. Android additionally consults `RemoteHealthTips` (the
-/// backend's health_tips table) first, so a NEW test type can get a tip without an app release;
-/// iOS has no remote-tips client yet, so the maps below are currently the only source rather than
-/// an offline fallback. Wiring the remote feed in later changes where the content comes from, not
-/// the rules around it.
+/// Direct port of `ai/PersonalizedTips.kt`. Content for a given test+status comes from
+/// `RemoteHealthTips` (the backend's health_tips table) when available — so a NEW test type gets a
+/// tip the moment it's added to the DB, with no app release needed — falling back to the maps
+/// below, which exist purely as an offline / first-launch-before-first-sync safety net, not as the
+/// thing that has to be edited to add tips.
 enum PersonalizedTips {
 
     private static let lowTips: [String: HealthTip] = [
@@ -109,7 +109,8 @@ enum PersonalizedTips {
                 let status = (parameter.status ?? "").trimmingCharacters(in: .whitespaces)
                 let statusKey = status.lowercased()
                 guard statusKey == "low" || statusKey == "high" else { continue }
-                guard var tip = (statusKey == "low" ? lowTips[canonical] : highTips[canonical])
+                guard var tip = RemoteHealthTips.get(canonicalParam: canonical, status: statusKey)
+                    ?? (statusKey == "low" ? lowTips[canonical] : highTips[canonical])
                 else { continue }
 
                 let date = (report.reportDate?.isEmpty == false)

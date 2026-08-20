@@ -46,6 +46,11 @@ struct HealthDecoderApp: App {
                     // reboots by itself, but this also picks up schedules saved while permission
                     // was still denied (the analog of Android's BootReceiver re-arm).
                     NotificationManager.rescheduleAll()
+                    // Personalized health tips live in the backend's health_tips table so a new
+                    // tip reaches every install without an app release. Fetched once ever, and
+                    // retried on a later launch if this one has no network. Never blocks the UI:
+                    // PersonalizedTips has a complete bundled fallback.
+                    await RemoteHealthTips.fetchIfNeverFetched()
                 }
         }
     }
