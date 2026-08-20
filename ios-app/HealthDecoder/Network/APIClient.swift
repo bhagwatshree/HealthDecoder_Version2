@@ -90,6 +90,18 @@ final class APIClient {
         try await post("api/auth/change-password", body: request)
     }
 
+    /// Attaches a bring-your-own Gemini key to the signed-in account, giving that user their own
+    /// quota instead of the shared pool. Mirrors Android's `setGeminiKeyOnAccount`. Sending an
+    /// empty key clears it, which is how the "remove my key" path works.
+    func setGeminiKeyOnAccount(_ request: ApiKeyRequest) async throws -> SimpleResponse {
+        try await post("api/user/gemini-key", body: request)
+    }
+
+    /// The Sarvam equivalent of `setGeminiKeyOnAccount`.
+    func setSarvamKeyOnAccount(_ request: ApiKeyRequest) async throws -> SimpleResponse {
+        try await post("api/user/sarvam-key", body: request)
+    }
+
     func resetPasswordOtp(_ request: ResetPasswordRequest) async throws -> SimpleResponse {
         try await post("api/auth/reset-password-otp", body: request, authenticated: false)
     }
