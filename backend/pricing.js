@@ -4,9 +4,20 @@
 // INR->USD is only used to convert Sarvam's rupee rates into the same unit as everything else.
 export const INR_PER_USD = 83;
 
-// https://ai.google.dev/gemini-api/docs/pricing
+// https://ai.google.dev/gemini-api/docs/pricing — last verified 2026-08-19. gemini-3.6-flash
+// was previously listed here at 2.5-flash's rate ($0.30/$2.50); that was wrong, its real price
+// is 5x higher ($1.50/$7.50) — fixed below. The app now defaults to gemini-3.7-flash (half the
+// cost of 3.6, see server.js) but 3.6's entry is kept accurate for any historical/override calls.
 export const GEMINI_PRICING = {
+  'gemini-3.7-flash': {
+    inputPerMTokens: 0.75,
+    outputPerMTokens: 3.75,
+  },
   'gemini-3.6-flash': {
+    inputPerMTokens: 1.50,
+    outputPerMTokens: 7.50,
+  },
+  'gemini-3.5-flash-lite': {
     inputPerMTokens: 0.30,
     outputPerMTokens: 2.50,
   },

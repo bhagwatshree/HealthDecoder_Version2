@@ -602,7 +602,6 @@ fun ScanScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
-                .appWatermark()
         ) {
             Column(
                 modifier = Modifier

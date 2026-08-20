@@ -37,6 +37,7 @@ object RemoteHealthTips {
         memoryCache?.let { return it }
         val raw = prefs(context).getString(KEY_TIPS_JSON, null)
         val parsed = raw?.let { runCatching { gson.fromJson<List<RemoteHealthTip>>(it, listType) }.getOrNull() }
+            ?.mapNotNull { it.sanitizedTip() }
             ?.associate { "${it.canonicalParam}|${it.status.lowercase()}" to HealthTip(it.headline, it.detail) }
             ?: emptyMap()
         memoryCache = parsed
@@ -60,4 +61,25 @@ object RemoteHealthTips {
                     .apply()
             }
     }
+}
+
+/**
+ * The backend's health_tips rows are cached as JSON, and Gson will put null into these non-null
+ * fields if a row ever omits one. `it.status.lowercase()` in loadCache() would then throw -- the
+ * same failure that crashed the reminder screens, one bad row away.
+ *
+ * A tip is dropped when it has no canonicalParam or status, because those two ARE the cache key:
+ * without them it can never be looked up, so keeping it only risks the crash for no benefit.
+ */
+private fun RemoteHealthTip?.sanitizedTip(): RemoteHealthTip? {
+    val t = this ?: return null
+    val param = ((t.canonicalParam as String?) ?: "").trim()
+    val status = ((t.status as String?) ?: "").trim()
+    if (param.isEmpty() || status.isEmpty()) return null
+    return t.copy(
+        canonicalParam = param,
+        status = status,
+        headline = (t.headline as String?) ?: "",
+        detail = (t.detail as String?) ?: ""
+    )
 }

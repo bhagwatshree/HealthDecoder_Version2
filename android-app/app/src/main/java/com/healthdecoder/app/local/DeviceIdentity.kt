@@ -37,22 +37,35 @@ object DeviceIdentity {
 
         val deviceId = AppSettings.getOrCreateInstallId(context)
         val body = JsonObject().apply { addProperty("deviceId", deviceId) }
-        val request = Request.Builder()
-            .url("${NetworkModule.AI_PROXY_BASE_URL}api/device/register")
-            .addHeader("ngrok-skip-browser-warning", "true")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) return null
-                val token = com.google.gson.JsonParser.parseString(text)
-                    .asJsonObject.get("token")?.asString?.takeIf { it.isNotBlank() }
-                token?.also { AppSettings.setDeviceToken(context, it) }
+        // Same host fallback as BackendAiClient.generate(): the Function URL sits on a different
+        // domain from the rest of the backend, and a network that blocks it would leave the app
+        // with no device token at all — which reads to the user as "every scan fails" even though
+        // the identical handler is reachable through API Gateway.
+        val hosts = listOf(NetworkModule.AI_PROXY_BASE_URL, NetworkModule.resolveBaseUrl(context)).distinct()
+
+        for (host in hosts) {
+            val request = Request.Builder()
+                .url("${host}api/device/register")
+                .addHeader("ngrok-skip-browser-warning", "true")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            try {
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val token = com.google.gson.JsonParser.parseString(text)
+                            .asJsonObject.get("token")?.asString?.takeIf { it.isNotBlank() }
+                        if (token != null) {
+                            AppSettings.setDeviceToken(context, token)
+                            return token
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Transport failure against this host — try the next one.
             }
-        } catch (e: Exception) {
-            null
         }
+        return null
     }
 }

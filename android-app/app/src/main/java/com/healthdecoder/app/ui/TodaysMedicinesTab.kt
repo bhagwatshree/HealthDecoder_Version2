@@ -40,6 +40,7 @@ import androidx.core.content.ContextCompat
 import com.healthdecoder.app.model.MedicationHistory
 import com.healthdecoder.app.reminder.MedicineReminderManager
 import com.healthdecoder.app.reminder.MedicineSchedule
+import com.healthdecoder.app.reminder.isDueToday
 import com.healthdecoder.app.reminder.MedicineScheduleStore
 import com.healthdecoder.app.reminder.SlotConfig
 import com.healthdecoder.app.reminder.AppointmentSchedule
@@ -211,7 +212,15 @@ fun TodaysMedicinesTab(
     // opens or after it closes — the Manage section below still lists every schedule so the user
     // can see/edit it regardless.
     val todayIso = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date()) }
-    val activeVisibleSchedules = visibleSchedules.filter { it.isCurrentlyActive(todayIso) }
+    val todayDayOfWeek = remember { java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) }
+    // Being inside the start/end window is not enough to be due TODAY: a script can name the days
+    // it runs on ("5 days a week, Thursday & Sunday off") or a multi-day cadence, and this screen
+    // used to honour neither. It listed such a medicine every day while the alarm code — the only
+    // caller of isDueToday — correctly skipped it, so the card said take it and the reminder never
+    // came. Same check, one place, so screen and alarms cannot disagree.
+    val activeVisibleSchedules = visibleSchedules.filter {
+        it.isCurrentlyActive(todayIso) && it.isDueToday(todayDayOfWeek, todayIso)
+    }
     val hasMedsToday = activeVisibleSchedules.any { s -> s.slots.values.any { it.enabled } }
 
     val canScheduleExact = remember {

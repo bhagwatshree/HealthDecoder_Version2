@@ -16,9 +16,9 @@ object MedicalEngine {
 
     private val gson: Gson = GsonBuilder().setLenient().create()
 
-    private fun aiJson(context: Context, prompt: String): String? {
+    private fun aiJson(context: Context, prompt: String, operation: String): String? {
         return try {
-            val raw = BackendAiClient.generateText(context, prompt)
+            val raw = BackendAiClient.generateText(context, prompt, operation)
             GeminiClient.stripJsonFences(raw)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -40,7 +40,7 @@ Return ONLY raw JSON (no code fences) with this schema:
 {"hasComparison":true,"previousReportId":"${previous.id}","previousReportDate":"${previous.reportDate}","comparisonSummary":"2-3 patient-friendly sentences","status":"improved|worsened|no_change|mixed","differences":[{"name":"","previous":"","current":"","change":"increased|decreased|stable|changed","status":"improved|worsened|no_change"}],"medicationChanges":{"added":[],"removed":[],"changed":[]}}
 """.trim()
 
-        aiJson(context, prompt)?.let { json ->
+        aiJson(context, prompt, operation = "compare")?.let { json ->
             runCatching { gson.fromJson(json, ComparisonResult::class.java) }.getOrNull()?.let { return it }
         }
         return localComparison(newReport, previous)
@@ -113,7 +113,7 @@ Return ONLY raw JSON with schema:
 Only recommend specialists if findings warrant it. Empty sideEffects if no medications.
 """.trim()
 
-        aiJson(context, prompt)?.let { json ->
+        aiJson(context, prompt, operation = "insights")?.let { json ->
             runCatching { gson.fromJson(json, HealthInsights::class.java) }.getOrNull()?.let { return it }
         }
         return localInsights(report)
@@ -240,12 +240,12 @@ Answer (in $language):
                 if (file.exists()) {
                     val bytes = file.readBytes()
                     val mime = if (imagePath.endsWith(".png", true)) "image/png" else "image/jpeg"
-                    BackendAiClient.generateFromImage(context, prompt, bytes, mime).trim()
+                    BackendAiClient.generateFromImage(context, prompt, bytes, mime, operation = "chat").trim()
                 } else {
-                    BackendAiClient.generateText(context, prompt).trim()
+                    BackendAiClient.generateText(context, prompt, operation = "chat").trim()
                 }
             } else {
-                BackendAiClient.generateText(context, prompt).trim()
+                BackendAiClient.generateText(context, prompt, operation = "chat").trim()
             }
             if (answer.isNotBlank()) {
                 answer to "ai"
@@ -313,7 +313,7 @@ Use short paragraphs and dashed lists ("- item"). If a section has nothing, keep
 
         val language = AppSettings.getPreferredLanguage(context)
 
-        val rawAnalysis = aiJson(context, prompt)?.let { json ->
+        val rawAnalysis = aiJson(context, prompt, operation = "detailed-analysis")?.let { json ->
             runCatching { gson.fromJson(json, DetailedAnalysis::class.java) }.getOrNull()?.let {
                 if (it.sections.isNotEmpty()) it.copy(disclaimer = disclaimer, source = "ai") else null
             }
@@ -402,7 +402,7 @@ Use short paragraphs and dashed lists ("- item"). If a section has nothing, keep
             If no medicine name is legible, return exactly: NONE
         """.trimIndent()
         return try {
-            val raw = BackendAiClient.generateFromImage(context, prompt, imageBytes, mimeType)
+            val raw = BackendAiClient.generateFromImage(context, prompt, imageBytes, mimeType, operation = "medicine-identify")
             val cleaned = GeminiClient.stripJsonFences(raw).trim().removeSurrounding("\"").trim()
             if (cleaned.equals("NONE", ignoreCase = true) || cleaned.isBlank()) "" else cleaned.lines().first().trim()
         } catch (e: Exception) {
@@ -438,7 +438,7 @@ Return ONLY raw JSON (no code fences):
 If you don't recognise the medicine name or it seems misspelled, set category to "Unknown" and basicUse to a suggestion like "This name was not recognised. Please check the spelling."
 """.trim()
 
-        val json = aiJson(context, prompt)
+        val json = aiJson(context, prompt, operation = "medicine-lookup")
         val result = json?.let {
             runCatching { gson.fromJson(it, MedicineInfo::class.java) }.getOrNull()
         } ?: MedicineInfo(

@@ -116,7 +116,13 @@ object BackgroundScanScheduler {
                 updateJobProgress(scanJob.id, ScanJobStatus.ERROR, 1.0f, error = ai.message ?: "Analysis failed. Please try again.")
             } catch (e: Exception) {
                 e.printStackTrace()
-                updateJobProgress(scanJob.id, ScanJobStatus.ERROR, 1.0f, error = "Scan failed. Please check internet connection.")
+                // Deliberately NOT "check your internet connection". Every reachability failure
+                // already arrives as a BackendAiException with a specific reason, caught above;
+                // anything landing here is a bug on the device side (decode, storage, parsing),
+                // and blaming the network sent people to reset their Wi-Fi over a fault that had
+                // nothing to do with it. Surface the real exception type instead.
+                val detail = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName
+                updateJobProgress(scanJob.id, ScanJobStatus.ERROR, 1.0f, error = "Scan failed: $detail")
             }
         }
         

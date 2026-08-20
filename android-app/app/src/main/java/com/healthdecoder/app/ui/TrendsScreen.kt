@@ -115,7 +115,15 @@ fun TrendsScreen(
         // Default to the family member selected on Home, if that person has trend data.
         val active = com.healthdecoder.app.local.AppSettings.getActivePatient(context)
         selectedPatient = patients.firstOrNull { it.equals(active, ignoreCase = true) } ?: patients.firstOrNull()
-        if (selectedPatient == null) isLoading = false
+        if (selectedPatient == null) {
+            isLoading = false
+        } else {
+            // Default to the narrowest period (3m/6m/1y) that actually has data for THIS
+            // patient, rather than every report ever scanned — filter chips still let the
+            // user widen it.
+            val patientReports = reports.filter { it.patientName.equals(selectedPatient, ignoreCase = true) }
+            period = LocalRepository.computeDefaultPeriod(patientReports)
+        }
     }
 
     // Reload trends when patient/period changes, or the user taps refresh.
@@ -186,7 +194,6 @@ fun TrendsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
-                .appWatermark()
         ) {
             // Patient + key-only controls
             Row(
@@ -250,7 +257,9 @@ fun TrendsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(listOf(null to "All", "3m" to "3M", "6m" to "6M", "1y" to "1Y", "2y" to "2Y")) { (value, label) ->
+                // Narrowest first, "All" last — same widening order as Records' filter, and the
+                // widest is least used now that the screen opens on a focused window.
+                items(listOf("3m" to "3M", "6m" to "6M", "1y" to "1Y", "2y" to "2Y", null to "All")) { (value, label) ->
                     FilterChip(
                         selected = period == value,
                         onClick = { period = value },

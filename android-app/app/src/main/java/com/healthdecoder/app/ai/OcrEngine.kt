@@ -1,11 +1,18 @@
 package com.healthdecoder.app.ai
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Log
 import com.healthdecoder.app.model.Medication
 import com.healthdecoder.app.model.TestResults
+import com.google.android.gms.tasks.Tasks
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 /** Future test the doctor recommended, extracted from a scan. */
 data class RecommendedTest(
@@ -85,6 +92,50 @@ data class MultiScanExtraction(
  */
 object OcrEngine {
 
+    /**
+     * AWS Lambda refuses any invocation payload over 6,291,456 bytes — a hard platform limit,
+     * not a setting, returned as a 413 before our code runs. Budget the RAW image bytes for one
+     * request well under it: base64 costs 4 bytes per 3 (+33%), and the prompt, JSON envelope and
+     * per-image metadata all share the same body. 3.5MB raw lands around 4.7MB on the wire,
+     * leaving real headroom rather than sitting on the cliff edge.
+     */
+    private const val LAMBDA_MAX_REQUEST_BYTES = 6L * 1024 * 1024
+    // x3/4 converts the wire budget back to raw bytes (undoing base64's +33%), then a further
+    // x3/4 keeps a quarter of the limit free for the prompt and JSON envelope. ~3.5MB raw.
+    private const val MAX_CHUNK_RAW_BYTES = LAMBDA_MAX_REQUEST_BYTES * 3 / 4 * 3 / 4
+
+    /**
+     * Splits pages into chunks bounded by page count AND total bytes, whichever is hit first.
+     *
+     * A single page larger than [maxBytes] is still sent on its own rather than dropped — it is
+     * the caller's only chance at that page, and [ImageUtil] has already downscaled it, so in
+     * practice one page is well under the budget. If such a page does exceed the platform limit
+     * the backend's 413 now carries the real reason.
+     */
+    internal fun chunkByBudget(
+        images: List<Pair<ByteArray, String>>,
+        maxPages: Int,
+        maxBytes: Long
+    ): List<List<Pair<ByteArray, String>>> {
+        val chunks = mutableListOf<List<Pair<ByteArray, String>>>()
+        var current = mutableListOf<Pair<ByteArray, String>>()
+        var currentBytes = 0L
+        for (image in images) {
+            val size = image.first.size.toLong()
+            val wouldExceed = current.isNotEmpty() &&
+                (current.size >= maxPages || currentBytes + size > maxBytes)
+            if (wouldExceed) {
+                chunks.add(current)
+                current = mutableListOf()
+                currentBytes = 0L
+            }
+            current.add(image)
+            currentBytes += size
+        }
+        if (current.isNotEmpty()) chunks.add(current)
+        return chunks
+    }
+
     private val gson: Gson = GsonBuilder().setLenient().create()
 
     /** Marks a report saved via [localFallback] — the AI never actually read the document, so
@@ -97,31 +148,52 @@ object OcrEngine {
      * Scans one or more page images. The pages may contain several distinct reports;
      * each comes back as its own entry with its own name and correctly chosen date.
      *
-     * Large batches are processed CHUNK BY CHUNK ([AppSettings.getScanChunkPages] pages
-     * per AI request — one giant request exceeds free-tier limits and fails), then the
-     * chunk results are merged; a report whose pages span two chunks is recombined by
-     * matching name + date. A failed chunk is skipped rather than failing the whole scan.
+     * Large batches are processed CHUNK BY CHUNK, then merged; a report whose pages span two
+     * chunks is recombined by matching name + date. A failed chunk is skipped rather than
+     * failing the whole scan.
+     *
+     * A chunk is bounded by BOTH a page count ([AppSettings.getScanChunkPages]) and a byte
+     * budget ([MAX_CHUNK_RAW_BYTES]) — see [chunkByBudget]. The page count alone was not enough:
+     * AWS Lambda hard-rejects any request body over 6,291,456 bytes with a 413 before our
+     * handler ever runs, and 12 pages of a densely printed report comfortably exceeds that once
+     * base64 inflates them by a third. Photograph a thick discharge summary and every scan
+     * failed, with the size never mentioned anywhere in the error.
+     *
+     * Note this is about rendered PAGES, not source files: a PDF is rasterised to at most 15
+     * page images before it gets here (see FileImportUtil.renderPdf) and the PDF's own file size
+     * is never sent anywhere, so a 40MB PDF is not itself a problem.
      */
     fun scan(
         context: Context,
         images: List<Pair<ByteArray, String>>,
         localOcrText: String,
         scanType: String,
-        reportCategory: String
+        reportCategory: String,
+        operation: String = "scan"
     ): MultiScanExtraction {
         val chunkSize = com.healthdecoder.app.local.AppSettings.getScanChunkPages(context)
-        val chunks = if (images.isEmpty()) listOf(emptyList()) else images.chunked(chunkSize)
+        val chunks = if (images.isEmpty()) listOf(emptyList())
+            else chunkByBudget(images, chunkSize, MAX_CHUNK_RAW_BYTES)
 
         val results = mutableListOf<MultiScanExtraction>()
+        val chunkTexts = mutableListOf<String>()
         var failedChunks = 0
         for ((index, chunk) in chunks.withIndex()) {
-            // The device-OCR hint text belongs to the first page; only give it to chunk 1.
-            val ref = if (index == 0) localOcrText else ""
-            val result = scanChunk(context, chunk, ref, scanType, reportCategory, index + 1, chunks.size)
+            // On-device OCR over THIS chunk's pages. Free (ML Kit, no network), and it now does
+            // double duty: the accuracy hint below, AND the searchable transcription that the
+            // model no longer burns output tokens re-typing (see buildPrompt). [localOcrText] is
+            // only ever page 1's text from the scan screen, so it's a fallback, not the source.
+            val prepared = localOcrPages(chunk)
+            val chunkText = prepared.text.ifBlank { if (index == 0) localOcrText else "" }
+            chunkTexts.add(chunkText)
+            val result = scanChunk(context, prepared.images, chunkText, scanType, reportCategory, index + 1, chunks.size, operation)
             if (result != null) results.add(result) else failedChunks++
         }
-        if (results.isEmpty()) return localFallback(localOcrText, scanType)
+        val fullText = chunkTexts.filter { it.isNotBlank() }.joinToString("\n\n").ifBlank { localOcrText }
+        if (results.isEmpty()) return localFallback(fullText, scanType)
         val merged = mergeChunks(results)
+            .withLocalTranscription(fullText)
+            .withLocalPatientName(context, fullText)
         // A partial failure used to vanish with no trace — some pages' data (e.g. the very
         // last page of a multi-page report) silently missing from the saved report with
         // nothing to indicate why. Now it's visible on the report itself instead of only in
@@ -144,14 +216,15 @@ object OcrEngine {
         scanType: String,
         reportCategory: String,
         part: Int,
-        totalParts: Int
+        totalParts: Int,
+        operation: String
     ): MultiScanExtraction? = try {
         val prompt = buildPrompt(referenceText, scanType, reportCategory, images.size, part, totalParts)
         // Scan calls go through our backend proxy (BackendAiClient), NOT GeminiClient directly —
         // the Gemini key never touches the device. Chat, medicine lookup/identify, and detailed
         // analysis are migrated too (see MedicalEngine). TTS (SpeechEngine) and translation
         // (LanguageUtil) still call Sarvam directly — the backend has no Sarvam proxy yet.
-        val raw = BackendAiClient.generateFromImages(context, prompt, images)
+        val raw = BackendAiClient.generateFromImages(context, prompt, images, operation)
         parse(GeminiClient.stripJsonFences(raw))
     } catch (e: BackendAiClient.BackendAiException) {
         // A known, deterministic failure (daily quota exhausted, server down) — never worth
@@ -240,7 +313,7 @@ object OcrEngine {
         val categoryText = if (scanType == "prescription")
             "The user is scanning this mainly to capture prescribed medicines, so identify EVERY medication, dosage, frequency, duration and instruction with great care. BUT do not assume the document is a plain prescription slip — classify \"reportType\" by what the document ACTUALLY is (a Discharge Summary, Consultation Note, Prescription, Lab Report or Diagnostic Scan), because discharge summaries and consultation notes also list medicines. Set \"reportName\" to the document's real printed title (e.g. \"Discharge Summary\")."
         else
-            "This document is a Medical/Diagnostic Report of category \"$reportCategory\". Focus on patient name, dates, and extracting findings, observations, conclusions, and test parameters (values, units, reference ranges, abnormal flags). Still classify \"reportType\" by what the document actually is."
+            "This document is a Medical/Diagnostic Report of category \"$reportCategory\". Focus on dates, and extracting findings, observations, conclusions, and test parameters (values, units, reference ranges, abnormal flags). Still classify \"reportType\" by what the document actually is."
 
         val refBlock = if (referenceText.isNotBlank())
             "Here is auxiliary on-device OCR text to assist accuracy. It may be incomplete or miss handwriting, so ALWAYS prefer what you can read directly from the image:\n\"\"\"\n$referenceText\n\"\"\"\n"
@@ -268,11 +341,15 @@ A page often shows several dates with different labels: "Printed on", "Registere
 3. Set "dateSource" to the label of the date you chose (e.g. "Reported", "Procedure", "Visit", "Unlabeled").
 4. Convert ALL dates to YYYY-MM-DD. Dates may be printed day-first in Indian formats (12/03/2026, 12-03-26, 12.Mar.2026, 12 March 2026). Do not guess; if no date is visible for a report, set reportDate to null.
 
+PRIVACY: identity details (the patient's name, the referring doctor, the lab/hospital letterhead,
+ID and contact numbers) are deliberately blacked out on these pages before they reach you. Do not
+try to infer, reconstruct or report them, and do not treat a blacked-out box as missing data —
+the device already holds those details. Extract only the clinical content.
+
 Also ensure that:
-1. Patient name is identified accurately.
-2. "reportName" is the specific printed name of each report (e.g. "Complete Blood Count", "Lipid Profile", "2D Echocardiography").
-3. Comments, instructions, remarks, or advice are extracted per report.
-4. MEDICATIONS — extract EVERY medicine listed, including all rows of a "DISCHARGE MEDICATION",
+1. "reportName" is the specific printed name of each report (e.g. "Complete Blood Count", "Lipid Profile", "2D Echocardiography").
+2. Comments, instructions, remarks, or advice are extracted per report.
+3. MEDICATIONS — extract EVERY medicine listed, including all rows of a "DISCHARGE MEDICATION",
    "Treatment", "Rx", or "Medicines on discharge" table in a discharge summary (these tables are
    often long — do not stop early or summarise; return one entry per medicine). For each medicine:
    - "name": drug name WITH its strength (e.g. "Concor 5mg", "Dolo 650mg", "Amifru 40mg"). Drop the
@@ -318,7 +395,7 @@ Also ensure that:
      "intervalDays" is how often each dose repeats, "durationDays" is how long the course runs.
    When the doctor has struck through a printed medicine and handwritten a replacement next to it,
    use the handwritten one as the name and note the original in "notes".
-5. Future recommended tests go into that report's "recommendedTests".
+4. Future recommended tests go into that report's "recommendedTests".
    FOLLOW-UP VISITS: from a "FOLLOW UP", "Review", "Revisit", "Come after" or "Next appointment"
    section, extract EACH doctor visit into "followUps": the "doctorName", the "specialty" if named
    (Cardiology, Endocrinology, Medicine OPD...), WHEN as "afterDays" — a NUMBER of days from the
@@ -326,8 +403,8 @@ Also ensure that:
    "after 1 month"→30, "after 3 months"→90) — or an explicit "date" (YYYY-MM-DD) if one is printed,
    the "place"/clinic/OPD, and "notes" (e.g. tests to carry like "bring Lipid Profile", or "check
    PT/INR after 3 days"). One entry per doctor/visit. Leave "followUps" empty if there is no such section.
-6. Test results go into that report's "testResults": lab parameters into "parameters"; scan/diagnostic conclusions into "findings".
-7. For each parameter, also classify it for trend-charting across multiple reports over time:
+5. Test results go into that report's "testResults": lab parameters into "parameters"; scan/diagnostic conclusions into "findings".
+6. For each parameter, also classify it for trend-charting across multiple reports over time:
    - "trendCategory": if it matches one of these, use that EXACT text (case-sensitive) —
      Blood Sugar, HbA1c, TSH, T3, T4, Hemoglobin, WBC, Platelets, Total Cholesterol, LDL, HDL,
      Triglycerides, Creatinine, Oxygen (SpO2), Ejection Fraction, Vitamin D, Vitamin B12
@@ -345,7 +422,6 @@ Also ensure that:
 
 The response MUST be a JSON object with this schema:
 {
-  "patientName": "Name or null",
   "reports": [
     {
       "reportName": "Specific report name or null",
@@ -368,15 +444,108 @@ The response MUST be a JSON object with this schema:
           }
         ],
         "findings": [ "" ]
-      },
-      "rawText": "Markdown transcription of THIS report's pages"
+      }
     }
-  ],
-  "rawText": "A clean, markdown-formatted full transcription of ALL visible text."
+  ]
 }
+
+Do NOT transcribe the document back to us — no "rawText", no full-text dump. The device
+already has its own OCR transcription for search; re-typing the page here costs output
+tokens (the expensive kind) for text we already hold. Return ONLY the structured fields.
 
 Return ONLY raw JSON. No markdown code fences, no extra text.
 """.trim()
+    }
+
+    /**
+     * On-device text recognition (ML Kit) over a chunk's page images. Runs entirely on the
+     * phone — no network, no API cost, no document content leaving the device for this step.
+     * Blocking by design: [scan] is already called from Dispatchers.IO, and the result is
+     * needed before the page images are sent on.
+     *
+     * Pages are decoded and recycled one at a time rather than all up front — a 15-page batch
+     * of full-resolution bitmaps held simultaneously is an easy OutOfMemoryError on a mid-range
+     * device. A page that fails to decode or recognise is skipped, never fatal: this text is an
+     * accuracy hint plus search fodder, so partial text is strictly better than none.
+     */
+    private fun localOcrPages(images: List<Pair<ByteArray, String>>): PreparedPages {
+        if (images.isEmpty()) return PreparedPages("", images)
+
+        // Building the recognizer is itself failure-prone in release builds — ML Kit resolves
+        // implementations reflectively, and a missing keep rule surfaces as a bare NPE from
+        // inside obfuscated ML Kit code (see proguard-rules.pro). This step is an OPTIONAL
+        // enhancement to a scan, never a precondition for one, so nothing it does may take the
+        // scan down with it: on failure the pages go up exactly as they would have before this
+        // existed. Note that also means no redaction happened, hence the loud log — a silent
+        // fallback here would quietly send identity data the caller believes was covered.
+        val recognizer = runCatching { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+            .getOrElse {
+                Log.w("ScanDiag", "on-device OCR unavailable; pages go UN-REDACTED and unindexed", it)
+                return PreparedPages("", images)
+            }
+
+        val texts = mutableListOf<String>()
+        val prepared = mutableListOf<Pair<ByteArray, String>>()
+
+        for ((bytes, mime) in images) {
+            val bmp = runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+            if (bmp == null) { prepared.add(bytes to mime); continue }
+            try {
+                val recognised = runCatching { Tasks.await(recognizer.process(InputImage.fromBitmap(bmp, 0))) }.getOrNull()
+                if (recognised == null) { prepared.add(bytes to mime); continue }
+                recognised.text.takeIf { it.isNotBlank() }?.let { texts.add(it) }
+
+                // Cover identity regions before this page leaves the device. A page with nothing
+                // to redact is forwarded byte-for-byte, so it never pays JPEG generation loss on
+                // a document the model must read small printed values from.
+                val redacted = PiiRedactor.redactedCopy(bmp, recognised)
+                if (redacted == null) {
+                    prepared.add(bytes to mime)
+                } else {
+                    val buffer = java.io.ByteArrayOutputStream()
+                    redacted.compress(Bitmap.CompressFormat.JPEG, 92, buffer)
+                    redacted.recycle()
+                    prepared.add(buffer.toByteArray() to "image/jpeg")
+                }
+            } finally {
+                bmp.recycle()
+            }
+        }
+        return PreparedPages(texts.joinToString("\n\n"), prepared)
+    }
+
+    /** On-device OCR text for a chunk, plus that chunk's pages with identity regions painted out. */
+    private data class PreparedPages(val text: String, val images: List<Pair<ByteArray, String>>)
+
+    /**
+     * Attaches the on-device transcription to the extraction, since the model is no longer asked
+     * to return one. Every section of a multi-report document gets the same full-document text:
+     * this text exists for full-text SEARCH (and the degraded-scan fallback), where matching the
+     * right document matters and per-panel precision does not — a search for "cholesterol" now
+     * matches every report scanned from that page rather than only the lipid panel, which is a
+     * cheap price for not paying output-token rates to have the page typed back to us.
+     */
+    private fun MultiScanExtraction.withLocalTranscription(text: String): MultiScanExtraction =
+        if (text.isBlank()) this
+        else copy(
+            rawText = rawText?.takeIf { it.isNotBlank() } ?: text,
+            reports = reports.map { it.copy(rawText = it.rawText?.takeIf { t -> t.isNotBlank() } ?: text) }
+        )
+
+    /**
+     * Resolves whose report this is WITHOUT the model's help — the name is blacked out before
+     * upload (see [PiiRedactor]), so it can only come from the device. Preference order:
+     * the name printed on the page as read by on-device OCR, then whichever family member the
+     * user currently has selected, then the existing "Unknown Patient" placeholder that the
+     * rest of the app already handles.
+     */
+    private fun MultiScanExtraction.withLocalPatientName(context: Context, text: String): MultiScanExtraction {
+        if (!patientName.isNullOrBlank()) return this
+        val fromPage = extractPatientName(text).takeIf { it != "Unknown Patient" }
+        val resolved = fromPage
+            ?: com.healthdecoder.app.local.AppSettings.getActivePatient(context)?.takeIf { it.isNotBlank() }
+            ?: return this
+        return copy(patientName = resolved)
     }
 
     /** Minimal offline fallback: keep the OCR text and a best-effort patient name. */
@@ -431,7 +600,7 @@ Return ONLY raw JSON. No markdown code fences, no extra text.
             Output: 
         """.trimIndent()
         return try {
-            val response = BackendAiClient.generateText(context, prompt)
+            val response = BackendAiClient.generateText(context, prompt, operation = "email-search-filter")
             GeminiClient.stripJsonFences(response).trim().removeSurrounding("\"").trim()
         } catch (e: Exception) {
             e.printStackTrace()

@@ -40,9 +40,10 @@ object AppointmentStore {
             .getString(KEY_APPOINTMENTS, null) ?: return emptyList()
         return try {
             val type = object : TypeToken<List<AppointmentSchedule>>() {}.type
-            gson.fromJson<List<AppointmentSchedule>>(json, type) ?: emptyList()
+            gson.fromJson<List<AppointmentSchedule>>(json, type).orEmpty().mapNotNull { it.sanitized() }
         } catch (e: Exception) { emptyList() }
     }
+
 
     fun saveAll(context: Context, list: List<AppointmentSchedule>) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -82,3 +83,31 @@ object AppointmentStore {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(KEY_APPOINTMENTS).apply()
     }
 }
+
+/**
+ * Same repair as MedicineScheduleStore.sanitized(), for the same reason: Gson fills fields
+ * reflectively and will put null into a non-null Kotlin String, so a record saved before a
+ * field existed crashes on first read rather than at parse time. doctorName, date, time and
+ * place all declare no default, so all four are exposed.
+ *
+ * An appointment with no date is dropped — it can't be sorted, shown or scheduled, and the
+ * alarm code would divide up a null. Everything else degrades to a blank string, which the UI
+ * already renders sensibly for appointments saved before patientName existed.
+ */
+internal fun AppointmentSchedule?.sanitized(): AppointmentSchedule? {
+    val a = this ?: return null
+    val date = str(a.date).trim()
+    if (date.isEmpty()) return null
+    return a.copy(
+        id = str(a.id).ifBlank { java.util.UUID.randomUUID().toString() },
+        doctorName = str(a.doctorName),
+        date = date,
+        time = str(a.time),
+        place = str(a.place),
+        recurrence = str(a.recurrence).ifBlank { "None" },
+        patientName = str(a.patientName)
+    )
+}
+
+/** Non-null String is a subtype of String?, so this accepts the field and catches Gson's null. */
+private fun str(value: String?): String = value ?: ""

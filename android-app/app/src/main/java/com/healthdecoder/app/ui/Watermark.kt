@@ -40,41 +40,7 @@ fun TopBarLogo(size: androidx.compose.ui.unit.Dp = 28.dp) {
     )
 }
 
-/**
- * Faint, centered Health Decoder logo watermark drawn behind a screen's own content.
- */
-@Composable
-fun Modifier.appWatermark(alpha: Float = 0.06f): Modifier {
-    val context = LocalContext.current
-    // ic_health_decoder_logo is a VectorDrawable (XML), not a raster image — BitmapFactory can
-    // only decode PNG/JPG/WebP and returns null for it, which used to crash on .asImageBitmap().
-    // A vector has to be drawn into a Bitmap explicitly via its own intrinsic size.
-    val bitmap = remember {
-        val drawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_health_decoder_logo)!!
-        val w = drawable.intrinsicWidth.coerceAtLeast(1)
-        val h = drawable.intrinsicHeight.coerceAtLeast(1)
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        drawable.setBounds(0, 0, w, h)
-        drawable.draw(Canvas(bmp))
-        bmp.asImageBitmap()
-    }
-    return this.drawBehind {
-        val target = size.minDimension * 0.85f
-        if (target <= 0f || bitmap.width <= 0) return@drawBehind
-        val scale = target / bitmap.width.toFloat()
-        val dstSize = IntSize(
-            (bitmap.width * scale).toInt().coerceAtLeast(1),
-            (bitmap.height * scale).toInt().coerceAtLeast(1)
-        )
-        val dstOffset = IntOffset(
-            ((size.width - dstSize.width) / 2f).toInt(),
-            ((size.height - dstSize.height) / 2f).toInt()
-        )
-        drawImage(
-            image = bitmap,
-            dstOffset = dstOffset,
-            dstSize = dstSize,
-            alpha = alpha
-        )
-    }
-}
+// The faint centred logo watermark that used to sit behind every screen's content was removed:
+// it competed with the content for contrast — worst on the Records list, where it showed through
+// the gaps between grouped report cards — and carried no information. The top-bar badge above is
+// the only branding a screen needs.

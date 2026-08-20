@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.healthdecoder.app.ai.DashboardEngine
 import com.healthdecoder.app.local.BackgroundScanScheduler
 import com.healthdecoder.app.model.DashboardData
 import kotlinx.coroutines.launch
@@ -39,6 +40,10 @@ fun RecordsScreen(
     var searchQuery by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var selectedPeriod by remember { mutableStateOf<String?>(null) }
+    // null = every kind. Scanning one PDF can file several reports at once (a haemogram, a
+    // biochemistry panel and a urine routine out of the same document), so a patient looking for
+    // "my prescriptions" otherwise has to read past a wall of lab panels to find them.
+    var selectedKind by remember { mutableStateOf<DashboardEngine.RecordKind?>(null) }
     var ftsMatchIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     LaunchedEffect(searchQuery) {
@@ -66,7 +71,14 @@ fun RecordsScreen(
         }
     }
 
-    LaunchedEffect(Unit) { loadDashboard() }
+    // On first open, default to the narrowest period (3m/6m/1y) that actually has data, rather
+    // than dumping every report ever scanned — the user can still widen it via the filter chips.
+    LaunchedEffect(Unit) {
+        selectedPeriod = com.healthdecoder.app.local.LocalRepository.computeDefaultPeriod(
+            com.healthdecoder.app.local.LocalRepository.getReports(context)
+        )
+        loadDashboard()
+    }
     LaunchedEffect(Unit) { BackgroundScanScheduler.onJobCompleted.collect { loadDashboard() } }
 
     Scaffold(
@@ -111,7 +123,6 @@ fun RecordsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .appWatermark()
         ) {
             BackgroundScanProgressBar(onNavigateToDetail = onNavigateToDetail)
 
@@ -136,11 +147,14 @@ fun RecordsScreen(
                 )
             )
 
+            // Narrowest first, "All Time" last: the list reads as widening ranges, and the widest
+            // one is the least-used now that the screen opens on a focused window by default.
             val periods = listOf(
-                null to tr("All Time"),
                 "1m" to tr("1 Month"),
                 "3m" to tr("3 Months"),
-                "6m" to tr("6 Months")
+                "6m" to tr("6 Months"),
+                "1y" to tr("1 Year"),
+                null to tr("All Time")
             )
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -161,6 +175,35 @@ fun RecordsScreen(
                             selectedContainerColor = MaterialTheme.colorScheme.primary,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                             selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val kinds = listOf(
+                DashboardEngine.RecordKind.PRESCRIPTION to tr("Prescriptions"),
+                DashboardEngine.RecordKind.LAB to tr("Lab Reports"),
+                DashboardEngine.RecordKind.OTHER to tr("Others"),
+                null to tr("All")
+            )
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(kinds) { (value, label) ->
+                    FilterChip(
+                        selected = selectedKind == value,
+                        onClick = { selectedKind = value },
+                        label = { Text(label, fontSize = 12.sp) },
+                        leadingIcon = if (selectedKind == value) {{
+                            Icon(imageVector = Icons.Default.Check, contentDescription = tr("Selected"), modifier = Modifier.size(14.dp))
+                        }} else null,
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSecondary,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondary
                         ),
                         shape = RoundedCornerShape(20.dp)
                     )
@@ -202,7 +245,9 @@ fun RecordsScreen(
                         val typeMatch = report.reportType?.contains(searchQuery, ignoreCase = true) == true
                         val medMatch = report.medications.any { it.name.contains(searchQuery, ignoreCase = true) }
                         val textMatch = report.id in ftsMatchIds
-                        patientMatch || commentsMatch || typeMatch || medMatch || textMatch
+                        val kindMatch = selectedKind == null ||
+                            DashboardEngine.recordKindOf(report) == selectedKind
+                        kindMatch && (patientMatch || commentsMatch || typeMatch || medMatch || textMatch)
                     }
                         // Order by the document's own date (newest first) — that's the order a
                         // patient/doctor actually reads records in, especially when catching up
@@ -234,8 +279,31 @@ fun RecordsScreen(
                                     )
                                 }
                             }
-                            items(filteredReports, key = { it.id }) { report ->
-                                ReportItemCard(report = report, onClick = { onNavigateToDetail(report.id) })
+                            // Grouped by source document normally; FLAT while searching, because a
+                            // search result needs to show the report that actually matched rather
+                            // than burying it among the other panels of its document.
+                            if (searchQuery.isNotEmpty()) {
+                                items(filteredReports, key = { it.id }) { report ->
+                                    ReportItemCard(report = report, onClick = { onNavigateToDetail(report.id) })
+                                }
+                            } else {
+                                val groups = DashboardEngine.groupBySourceDocument(filteredReports)
+                                items(groups, key = { it.first().id }) { group ->
+                                    // A document that produced a single report needs no box around
+                                    // it — the grouping only earns its space when there is a
+                                    // relationship to show.
+                                    if (group.size == 1) {
+                                        ReportItemCard(
+                                            report = group.first(),
+                                            onClick = { onNavigateToDetail(group.first().id) }
+                                        )
+                                    } else {
+                                        ReportGroupCard(
+                                            reports = group,
+                                            onReportClick = { id -> onNavigateToDetail(id) }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
