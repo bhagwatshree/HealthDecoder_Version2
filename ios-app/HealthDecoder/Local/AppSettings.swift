@@ -130,6 +130,13 @@ enum AppSettings {
 
     // MARK: - Scan pipeline tuning (internal, no UI — matches AppSettings.kt's defaults)
 
+    /// Which unit system trend charts standardise to. Mirrors Android's lab-unit preference;
+    /// `UnitConverter` resolves the actual unit per test from it.
+    static var labUnitSystem: String {
+        get { defaults.string(forKey: "lab_unit_system") ?? "Conventional" }
+        set { defaults.set(newValue, forKey: "lab_unit_system") }
+    }
+
     static var scanChunkPages: Int {
         get { defaults.object(forKey: "scan_chunk_pages") as? Int ?? 6 }
         set { defaults.set(min(max(newValue, 1), 30), forKey: "scan_chunk_pages") }

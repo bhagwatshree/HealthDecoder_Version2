@@ -450,7 +450,11 @@ object DashboardEngine {
         val s = raw?.trim()?.lowercase() ?: return null to null
         if (s.isEmpty()) return null to null
         // First number(s) found, ignoring any trailing unit text.
-        val nums = Regex("[-+]?\\d*\\.?\\d+").findAll(s).map { it.value.toFloatOrNull() }.filterNotNull().toList()
+        // The sign is only a sign when nothing numeric precedes it. Without the lookbehind
+        // "70-100" reads as [70, -100] — the separating hyphen is eaten as a minus and the normal
+        // band is shaded from 70 down to -100. En-dash ranges ("13 – 17") escaped it; ASCII-hyphen
+        // ranges, which are the common spelling, did not.
+        val nums = Regex("(?<![\\d.])[-+]?\\d*\\.?\\d+").findAll(s).map { it.value.toFloatOrNull() }.filterNotNull().toList()
         return when {
             s.startsWith("<") || s.startsWith("less than") || s.startsWith("up to") || s.startsWith("upto") || s.startsWith("below") ->
                 null to nums.firstOrNull()

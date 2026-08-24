@@ -14,7 +14,14 @@ enum MedicalEngine {
         If no medicine name is legible, return exactly: NONE
         """
         do {
-            let raw = try await BackendAiClient.shared.generateFromImages(prompt: prompt, images: [(imageData, mimeType)])
+            // Smart Health Lens points a live camera at whatever is in front of it, which is very
+            // often a strip sitting on a prescription. That page carries the patient's name, so
+            // this frame gets the same redaction pass as a scanned report before it leaves the
+            // device. Android does NOT do this today — its identifyMedicineFromImage calls
+            // generateFromImage directly, bypassing PiiRedactor (see the note in that file).
+            let redacted = await PiiRedactor.redactedForUpload(imageData, mimeType: mimeType)
+            let raw = try await BackendAiClient.shared.generateFromImages(
+                prompt: prompt, images: [(redacted.data, redacted.mimeType)])
             var cleaned = GeminiClient.stripJsonFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.hasPrefix("\""), cleaned.hasSuffix("\""), cleaned.count > 1 {
                 cleaned = String(cleaned.dropFirst().dropLast())
@@ -103,8 +110,11 @@ enum MedicalEngine {
         do {
             let answer: String
             if let imageData {
+                // No attach button reaches this today, but the path is wired — redacting here
+                // means adding one later can't quietly start uploading identity data.
+                let redacted = await PiiRedactor.redactedForUpload(imageData, mimeType: "image/jpeg")
                 answer = try await BackendAiClient.shared.generateFromImages(
-                    prompt: prompt, images: [(imageData, "image/jpeg")]
+                    prompt: prompt, images: [(redacted.data, redacted.mimeType)]
                 )
             } else {
                 answer = try await BackendAiClient.shared.generateText(prompt: prompt)

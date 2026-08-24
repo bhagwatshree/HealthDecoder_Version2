@@ -100,7 +100,7 @@ struct HomeScreen: View {
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 LanguagePickerIcon()
-                NavigationLink(destination: AccountScreen()) {
+                NavigationLink(destination: SettingsScreen()) {
                     Image(systemName: "person.circle")
                 }
             }

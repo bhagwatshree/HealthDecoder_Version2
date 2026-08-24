@@ -90,17 +90,7 @@ enum OcrEngine {
     ) async -> [(data: Data, mimeType: String)] {
         var prepared: [(data: Data, mimeType: String)] = []
         for page in pages {
-            guard let image = UIImage(data: page.data) else { prepared.append(page); continue }
-            let lines = await TextRecognizer.recognizeLines(image)
-            guard
-                !lines.isEmpty,
-                let redacted = PiiRedactor.redactedCopy(of: image, lines: lines),
-                let jpeg = redacted.jpegData(compressionQuality: 0.92)
-            else {
-                prepared.append(page)
-                continue
-            }
-            prepared.append((data: jpeg, mimeType: "image/jpeg"))
+            prepared.append(await PiiRedactor.redactedForUpload(page.data, mimeType: page.mimeType))
         }
         return prepared
     }

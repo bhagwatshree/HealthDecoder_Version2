@@ -140,3 +140,33 @@ enum PiiRedactor {
         return expression.firstMatch(in: line, options: [], range: range) != nil
     }
 }
+
+extension PiiRedactor {
+    /// Runs one image through the on-device recognizer and paints out identity regions, returning
+    /// bytes ready to upload.
+    ///
+    /// The single entry point every image-to-model path should use, so adding a new one can't
+    /// silently skip redaction — which is exactly how the Smart Health Lens path ended up
+    /// uploading unredacted frames on both platforms.
+    ///
+    /// FAILS OPEN, deliberately: a page that can't be decoded or recognised is forwarded
+    /// unchanged rather than dropped. Losing a clinical page is a worse outcome than a lab's
+    /// letterhead reaching the model, and this is best-effort reduction, not de-identification in
+    /// the regulatory sense (see the type's own note).
+    ///
+    /// A page with nothing to redact is returned BYTE-FOR-BYTE, so it never pays a round of JPEG
+    /// generation loss on a document the model must read small printed values from.
+    static func redactedForUpload(
+        _ data: Data,
+        mimeType: String
+    ) async -> (data: Data, mimeType: String) {
+        guard let image = UIImage(data: data) else { return (data, mimeType) }
+        let lines = await TextRecognizer.recognizeLines(image)
+        guard
+            !lines.isEmpty,
+            let redacted = redactedCopy(of: image, lines: lines),
+            let jpeg = redacted.jpegData(compressionQuality: 0.92)
+        else { return (data, mimeType) }
+        return (jpeg, "image/jpeg")
+    }
+}

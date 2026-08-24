@@ -120,7 +120,18 @@ struct TrendsScreen: View {
 
         // Standard units are resolved from the patient's FULL history, not the filtered set, so
         // the axis unit doesn't change when a filter happens to exclude the earliest report.
-        let units = DashboardEngine.resolveStandardUnits(scoped)
+        //
+        // The user's unit-system preference wins for any test the converter actually knows, so
+        // the axis is the unit they asked for rather than whichever unit the first-scanned report
+        // happened to print. Tests the converter doesn't know keep the first-seen unit, since
+        // there is no verified factor to restate them with.
+        var units = DashboardEngine.resolveStandardUnits(scoped)
+        let system: UnitConverter.System = AppSettings.labUnitSystem == "SI" ? .si : .conventional
+        for test in units.keys {
+            if let preferred = UnitConverter.standardUnit(for: test, system: system) {
+                units[test] = preferred
+            }
+        }
         trends = DashboardEngine.buildHealthSummary(reports: scoped, standardUnits: units).parameterTrends
 
         if !availableCategories.contains(selectedCategory) {

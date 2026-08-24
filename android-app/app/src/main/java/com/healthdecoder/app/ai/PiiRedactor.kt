@@ -1,12 +1,17 @@
 package com.healthdecoder.app.ai
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.util.Log
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 /**
  * Paints over identity-bearing regions of a scanned page before the image is uploaded for
@@ -134,5 +139,40 @@ object PiiRedactor {
         val paint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
         boxes.forEach { canvas.drawRect(it, paint) }
         return out
+    }
+}
+
+/**
+ * Runs one image through the on-device recognizer and paints out identity regions, returning
+ * bytes ready to upload.
+ *
+ * Exists so every image-to-model path can share ONE redaction entry point. Smart Health Lens
+ * previously called [BackendAiClient.generateFromImage] directly and uploaded camera frames
+ * unredacted — a user pointing the camera at a strip resting on a prescription sent the patient's
+ * name to the provider. Only [OcrEngine]'s scan path was covered.
+ *
+ * FAILS OPEN, deliberately: an image that can't be decoded or recognised is forwarded unchanged
+ * rather than dropped. Losing a clinical page is worse than a letterhead reaching the model, and
+ * this is best-effort reduction, not de-identification in the regulatory sense (see [PiiRedactor]).
+ *
+ * An image with nothing to redact is returned BYTE-FOR-BYTE, so it never pays a round of JPEG
+ * generation loss on a document the model must read small printed values from.
+ */
+fun redactImageForUpload(imageBytes: ByteArray, mimeType: String): Pair<ByteArray, String> {
+    val bmp = runCatching { BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) }.getOrNull()
+        ?: return imageBytes to mimeType
+    try {
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val recognised = runCatching {
+            Tasks.await(recognizer.process(InputImage.fromBitmap(bmp, 0)))
+        }.getOrNull() ?: return imageBytes to mimeType
+
+        val redacted = PiiRedactor.redactedCopy(bmp, recognised) ?: return imageBytes to mimeType
+        val buffer = java.io.ByteArrayOutputStream()
+        redacted.compress(Bitmap.CompressFormat.JPEG, 92, buffer)
+        redacted.recycle()
+        return buffer.toByteArray() to "image/jpeg"
+    } finally {
+        bmp.recycle()
     }
 }

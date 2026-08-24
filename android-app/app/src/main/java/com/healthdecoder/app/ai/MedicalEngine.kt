@@ -402,7 +402,12 @@ Use short paragraphs and dashed lists ("- item"). If a section has nothing, keep
             If no medicine name is legible, return exactly: NONE
         """.trimIndent()
         return try {
-            val raw = BackendAiClient.generateFromImage(context, prompt, imageBytes, mimeType, operation = "medicine-identify")
+            // Smart Health Lens points a live camera at whatever is in front of it, very often a
+            // strip resting on a prescription — so this frame gets the same redaction pass as a
+            // scanned report before it leaves the device. Without this the path bypassed
+            // PiiRedactor entirely, which OcrEngine's scan path has always used.
+            val (safeBytes, safeMime) = redactImageForUpload(imageBytes, mimeType)
+            val raw = BackendAiClient.generateFromImage(context, prompt, safeBytes, safeMime, operation = "medicine-identify")
             val cleaned = GeminiClient.stripJsonFences(raw).trim().removeSurrounding("\"").trim()
             if (cleaned.equals("NONE", ignoreCase = true) || cleaned.isBlank()) "" else cleaned.lines().first().trim()
         } catch (e: Exception) {

@@ -39,6 +39,13 @@ struct HealthDecoderApp: App {
                 // Re-render the whole tree when the language changes, so tr() re-evaluates
                 // everywhere at once — the analog of Compose reading AppLanguageState.current.
                 .id(language.current)
+                // themeMode was persisted but never read, so the Light/Dark setting did nothing.
+                // nil = follow the system, which is the "system" option.
+                .preferredColorScheme(
+                    AppSettings.themeMode == "light" ? .light
+                        : AppSettings.themeMode == "dark" ? .dark
+                        : nil
+                )
                 .task {
                     // Pull the DB-backed UI strings once, on the first launch with network.
                     language.bootstrap()
