@@ -75,15 +75,30 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: true
 
+  # UAT harness: drives the real app in the simulator and captures what each screen actually
+  # renders, so parity findings are observed rather than inferred from source.
+  HealthDecoderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HealthDecoderUITests
+    dependencies:
+      - target: HealthDecoder
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+
 schemes:
   HealthDecoder:
     build:
       targets:
         HealthDecoder: all
         HealthDecoderTests: [test]
+        HealthDecoderUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - HealthDecoderTests
+        - HealthDecoderUITests
