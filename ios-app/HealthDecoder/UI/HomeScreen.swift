@@ -42,6 +42,10 @@ struct HomeScreen: View {
                        container: Color(hex: 0xF3E5F5), content: Color(hex: 0x6A1B9A), route: .medicationTracker),
             HomeAction(label: "Pending Tests", emoji: "🚨",
                        container: Color(hex: 0xFFF9C4), content: Color(hex: 0xC62828), route: .pendingTests),
+            // Android reaches Trends from its bottom nav bar. iOS has no tab shell yet, so it
+            // sits here instead — the screen was previously unreachable by any route at all.
+            HomeAction(label: "Health Trends", emoji: "📈",
+                       container: Color(hex: 0xE3F2FD), content: Color(hex: 0x1565C0), route: .trends),
         ]
     }
 

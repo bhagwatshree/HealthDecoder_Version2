@@ -53,6 +53,8 @@ private struct MainRootView: View {
                         RemindersScreen()
                     case .medicationTracker:
                         MedicationTrackerScreen()
+                    case .trends:
+                        TrendsScreen()
                     case .pendingTests:
                         PendingTestsScreen()
                     }
@@ -63,6 +65,9 @@ private struct MainRootView: View {
         //   xcrun simctl launch <device> <bundle-id> -startAt records
         // Compiled out of release builds entirely.
         .onAppear {
+            // Seed the demo patient on request, so UI checks and screenshots have data without
+            // scanning a real report. Debug-only, alongside -startAt.
+            if ProcessInfo.processInfo.arguments.contains("-seedDemoData") { DemoDataSeeder.seed() }
             guard
                 let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-startAt"),
                 index + 1 < ProcessInfo.processInfo.arguments.count
@@ -73,6 +78,7 @@ private struct MainRootView: View {
             case "reminders": path.append(AppRoute.reminders)
             case "medications": path.append(AppRoute.medicationTracker)
             case "pendingTests": path.append(AppRoute.pendingTests)
+            case "trends": path.append(AppRoute.trends)
             case "chat": path.append(AppRoute.chat(contextHint: "Records"))
             case "doctorBrief": path.append(AppRoute.doctorBrief(patientName: ""))
             default: break

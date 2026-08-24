@@ -328,3 +328,51 @@ struct MedicineInfo: Codable, Equatable {
     var basicUse: String = ""
     var keyNotes: [String] = []
 }
+
+// MARK: - Trends
+
+/// One plotted reading. Port of `TrendDataPoint` in `model/Models.kt`.
+struct TrendDataPoint: Codable, Equatable, Identifiable {
+    var id: String { "\(reportId)|\(date)|\(value)" }
+
+    var date: String
+    var value: String
+    var unit: String = ""
+    var status: String = ""
+    /// Report this value came from, so a tapped point can open it.
+    var reportId: String = ""
+    /// Test condition for this specific reading ("Fasting" / "PP" / "Random" for blood sugar).
+    /// Points on the same line can differ, so this rides per-point, not per-trend.
+    var context: String = ""
+    /// Cross-lab unit standardization (trend chart only — the report screen always shows the
+    /// printed value). When a reading's printed unit differs from the test's locked standard and a
+    /// verified conversion exists, `value`/`unit` hold the CONVERTED figures and these hold what
+    /// the report actually printed, so the chart can note "converted from X". `converted` is false
+    /// both when no conversion was needed and when the unit could not be safely converted.
+    var originalValue: String = ""
+    var originalUnit: String = ""
+    var converted: Bool = false
+    /// The reading's healthy reference range, in the SAME (possibly converted) unit as `value`, so
+    /// the chart can shade a normal band. Nil when the report stated no range, or a one-sided
+    /// limit ("<200") leaves a bound open.
+    var refLow: Float? = nil
+    var refHigh: Float? = nil
+
+    var numericValue: Float? { Float(value) }
+}
+
+/// One test's series across reports. Port of `ParameterTrend`.
+struct ParameterTrend: Codable, Equatable, Identifiable {
+    var id: String { name }
+    var name: String
+    var dataPoints: [TrendDataPoint] = []
+    /// improving | worsening | stable | increasing | decreasing
+    var trend: String = "stable"
+}
+
+/// Port of `HealthSummary`. Only the parts iOS renders today are modelled; the medication
+/// timeline and narrative land with the Insights work.
+struct HealthSummary: Codable, Equatable {
+    var overallNarrative: String = ""
+    var parameterTrends: [ParameterTrend] = []
+}

@@ -15,4 +15,5 @@ enum AppRoute: Hashable {
     case reminders
     case medicationTracker
     case pendingTests
+    case trends
 }
