@@ -17,8 +17,8 @@ enum MedicalEngine {
             // Smart Health Lens points a live camera at whatever is in front of it, which is very
             // often a strip sitting on a prescription. That page carries the patient's name, so
             // this frame gets the same redaction pass as a scanned report before it leaves the
-            // device. Android does NOT do this today — its identifyMedicineFromImage calls
-            // generateFromImage directly, bypassing PiiRedactor (see the note in that file).
+            // device. Both platforms previously skipped it here: identifyMedicineFromImage called
+            // generateFromImage directly, which never touched PiiRedactor.
             let redacted = await PiiRedactor.redactedForUpload(imageData, mimeType: mimeType)
             let raw = try await BackendAiClient.shared.generateFromImages(
                 prompt: prompt, images: [(redacted.data, redacted.mimeType)])
