@@ -55,3 +55,8 @@ ios-app/.swiftpm/
 # Info.plist is generated from project.yml by xcodegen, like the .xcodeproj itself.
 ios-app/Generated/
 xcuserdata/
+
+# Firebase iOS config — pulled from the separate secrets repo, never committed here.
+# Without this line a plain `git add -A` stages it the moment it is dropped into ios-app/.
+ios-app/GoogleService-Info.plist
+android-app/app/google-services.json
