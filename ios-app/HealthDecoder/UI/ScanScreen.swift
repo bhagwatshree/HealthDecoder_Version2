@@ -139,6 +139,17 @@ struct ScanScreen: View {
         }
     }
 
+    /// Today in the same ISO shape `DateResolver` emits, used when a page carries no plausible
+    /// date. Pinned to a Gregorian POSIX calendar so the fallback can't shift under a device set
+    /// to a non-Gregorian calendar.
+    private static func todayISO() -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
     private func processScan(uploadOnly: Bool) async {
         errorMessage = nil
         isProcessing = true
@@ -212,7 +223,15 @@ struct ScanScreen: View {
                 patientName: chosenPatient.isEmpty
                     ? (section.patientName ?? extraction.patientName ?? AppSettings.activePatient)
                     : chosenPatient,
-                reportDate: section.reportDate,
+                // Re-check the model's date choice against every labeled date it found on the
+                // page, so a "Printed on" date never becomes a lab report's date — and normalise
+                // day-first Indian formats to ISO. Falls back to today when the page carries no
+                // plausible date at all, matching `LocalRepository.kt`'s `resolve(...) ?: today()`;
+                // storing nil instead would drop the report off every trend line.
+                reportDate: DateResolver.resolve(
+                    section,
+                    category: scanType == "prescription" ? "Prescription" : "General"
+                ) ?? Self.todayISO(),
                 reportType: section.reportType ?? (scanType == "prescription" ? "Prescription" : "Lab Report"),
                 extractedText: section.rawText,
                 comments: section.comments,
